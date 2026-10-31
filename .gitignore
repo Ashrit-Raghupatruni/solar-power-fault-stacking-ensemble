@@ -1,0 +1,26 @@
+# Ignore raw 100MB+ dataset CSV files (exceeds GitHub 100MB limit)
+Database/**/*.csv
+Database/*.csv
+*.csv.zip
+*.zip
+
+# Ignore large temporary files
+temp.pkl
+*.tmp
+*.log
+
+# Ignore Python caches & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Operating System files
+.DS_Store
+Thumbs.db
