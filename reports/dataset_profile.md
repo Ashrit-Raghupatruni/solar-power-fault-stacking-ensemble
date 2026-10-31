@@ -107,19 +107,27 @@ To prevent any form of target leakage or contamination:
 | `CV` | Ratio | **Input Feature** | Coefficient of variation of power envelope. |
 | `delta_PF` | Difference | **Input Feature** | Dynamic deviation in power factor. |
 | `SII` | Index | **Input Feature** | Spectral irregularity index. |
-| `apparent_power_VA` | VA ($V \cdot I$) | **Engineered Input** | Calculated AC apparent power. |
-| `reactive_power_var`| VAR ($\sqrt{S^2 - P^2}$) | **Engineered Input** | Calculated AC reactive power. |
-| `power_active_apparent_ratio` | Ratio | **Engineered Input** | Efficiency / distortion proxy ($P / S$). |
+| `apparent_power_VA` | VA ($V \cdot I$) | **Engineered Input** | Calculated AC apparent power: $\|V\| \cdot \|I\|$. |
+| `reactive_power_var`| VAR ($\sqrt{S^2 - P^2}$) | **Engineered Input** | Calculated AC reactive power: $\sqrt{\max(0, S^2 - P^2)}$. |
+| `power_active_apparent_ratio` | Ratio | **Engineered Input** | Efficiency / distortion proxy ($P / S$), clipped to $[0.0, 2.0]$. |
 | `voltage_deviation_pct` | % from 220V | **Engineered Input** | Percentage deviation from nominal 220V grid standard. |
 | `frequency_deviation_pct`| % from 50Hz | **Engineered Input** | Percentage deviation from nominal 50.0 Hz grid standard. |
+| `current_per_watt` | A/W ($\|I\| / \|P\|$) | **Engineered Input** | Current-to-power intensity ratio. Zero-denominator handling: replaces $P=0$ with NaN, fills with 0.0, and clips to $[0.0, 1.0]$. |
+
+### Explicit Feature Differentiation
+- **Original Dataset Columns**: 29 raw columns (5 direct sensor readings, 8 edge signal-processing features, 5 labels/targets, 4 metadata/grouping columns, and 7 edge detector/telemetry flags).
+- **Engineered Input Features**: Exactly 6 domain-specific electrical features calculated deterministically from the 5 physical sensor channels.
 
 ---
 
-## 5. Group Splitting & Normal Chunking Strategy
+## 5. Group Splitting & Contiguous Normal Block Strategy
 
 1. **Fault Contiguity**: Verified across all 3 station files. Each non-zero `event_id` represents a contiguous, unbroken temporal window of controlled fault induction.
-2. **Normal Data Grouping**: In raw telemetry, all normal rows share `event_id = 0`. Assigning all normal rows to one group would make group-aware cross-validation impossible.
-   - **Implemented Solution**: Normal observations are segmented into temporal blocks based on `(station_id, segment_id, time_block)`. This ensures normal operating windows are distributed across folds in a balanced, leakage-free structure.
+2. **Contiguous Normal Data Grouping**: In raw telemetry, all normal rows share `event_id = 0`.
+   - **True Contiguous Chunking**: Normal observations are grouped into unbroken, contiguous chronological temporal blocks of 300 seconds (5 minutes) within each calendar day (`segment_id`) before selection.
+   - **Zero Cross-Split Temporal Mixing**: Entire contiguous 300-second blocks are sampled and assigned unique `group_id`s `(station_id * 100000 + 50000 + segment_id * 1000 + time_block)`. `StratifiedGroupKFold` splits strictly by these `group_id`s, ensuring temporally adjacent seconds are never fractured across train and test partitions.
+3. **Canonical Label Mapping**:
+   - The raw CSV value `'med'` is formally mapped to the canonical label `'medium'` in both `src/config.py` and `src/preprocessing.py` using `RAW_SEVERITY_MAP` to ensure alignment with the official benchmark datasheet.
 3. **Leave-One-Station-Out (LOSO) Validation**:
    - Station 1: ~661 W baseline (Laboratory)
    - Station 2: ~685 W baseline (Residential)

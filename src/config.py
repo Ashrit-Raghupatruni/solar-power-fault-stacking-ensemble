@@ -73,15 +73,28 @@ CATEGORY_LABELS = [
     "compound"
 ]
 
-# 5 Severity grades (+ none)
+# Severity grades (+ none)
+# In raw CSVs: 'none', 'incipient', 'low', 'med', 'high', 'critical'
+# Canonical standardized internal representation: 'medium' mapped from raw 'med'
 SEVERITY_LABELS = [
     "none",
     "incipient",
     "low",
-    "med",
+    "medium",
     "high",
     "critical"
 ]
+
+# Raw CSV to canonical mapping dictionary
+RAW_SEVERITY_MAP = {
+    "none": "none",
+    "incipient": "incipient",
+    "low": "low",
+    "med": "medium",
+    "medium": "medium",
+    "high": "high",
+    "critical": "critical"
+}
 
 # Categorical mapping dictionaries
 CATEGORY_TO_IDX = {cat: idx for idx, cat in enumerate(CATEGORY_LABELS)}

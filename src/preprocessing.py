@@ -16,16 +16,17 @@ from sklearn.impute import SimpleImputer
 from src.config import (
     STATION_FILES, PROCESSED_DATA_DIR, MODELS_DIR,
     FEATURE_COLS, TARGET_CATEGORY, TARGET_SEVERITY,
-    CATEGORY_TO_IDX, SEVERITY_TO_IDX, RANDOM_STATE
+    CATEGORY_TO_IDX, SEVERITY_TO_IDX, RAW_SEVERITY_MAP, RANDOM_STATE
 )
 from src.feature_engineering import add_electrical_features
 
-def build_curated_benchmark_dataset(sample_normal_per_station: int = 15000) -> pd.DataFrame:
+def build_curated_benchmark_dataset(normal_block_length_s: int = 300, max_normal_blocks_per_st: int = 50) -> pd.DataFrame:
     """
     Constructs a balanced, high-utility benchmark dataset from the 3 station CSVs:
     - Retains ALL 30,142 controlled fault samples (100% fault event coverage).
-    - Samples a stratified proportion of normal baseline records per station.
-    - Resulting dataset is ~75,000 samples, fast to train on SVM/KNN without dropping rare faults.
+    - Preserves true temporal contiguity for normal data: segments normal observations into
+      contiguous chronological time blocks (e.g. 300-second windows) per day and station.
+    - Selects whole contiguous normal blocks rather than random rows, eliminating temporal leakage.
     """
     station_dfs = []
     
@@ -33,15 +34,29 @@ def build_curated_benchmark_dataset(sample_normal_per_station: int = 15000) -> p
         print(f"Loading {file_path.name}...")
         df_st = pd.read_csv(file_path)
         
-        # Split anomalies vs normal
+        # Standardize raw severity 'med' -> canonical 'medium'
+        df_st[TARGET_SEVERITY] = df_st[TARGET_SEVERITY].map(RAW_SEVERITY_MAP).fillna(df_st[TARGET_SEVERITY])
+        
+        # 1. Anomalies (100% retained)
         anomalies = df_st[df_st["anomaly"] == 1].copy()
+        # Group ID for anomalies is unique per station and event
+        anomalies["group_id"] = st_id * 100000 + anomalies["event_id"]
+        
+        # 2. Contiguous Normal Temporal Blocks (No random row shuffling)
         normals = df_st[df_st["anomaly"] == 0].copy()
+        # Form contiguous temporal blocks within each calendar day (segment_id)
+        # 300 seconds = 5-minute contiguous operational windows
+        normals["time_block"] = (normals["sample_id"] // normal_block_length_s)
+        normals["group_id"] = st_id * 100000 + 50000 + (normals["segment_id"] * 1000) + (normals["time_block"] % 500)
         
-        # Sample normal operating records
-        n_sample = min(len(normals), sample_normal_per_station)
-        normals_sampled = normals.sample(n=n_sample, random_state=RANDOM_STATE)
+        # Pick unique contiguous normal blocks to achieve ~15,000 normal samples per station
+        unique_blocks = normals["group_id"].unique()
+        rng = np.random.RandomState(RANDOM_STATE)
+        selected_blocks = rng.choice(unique_blocks, size=min(len(unique_blocks), max_normal_blocks_per_st), replace=False)
+        normals_curated = normals[normals["group_id"].isin(selected_blocks)].copy()
+        normals_curated = normals_curated.drop(columns=["time_block"])
         
-        combined_st = pd.concat([anomalies, normals_sampled], ignore_index=True)
+        combined_st = pd.concat([anomalies, normals_curated], ignore_index=True)
         station_dfs.append(combined_st)
         del df_st, anomalies, normals
         gc.collect()
@@ -49,7 +64,7 @@ def build_curated_benchmark_dataset(sample_normal_per_station: int = 15000) -> p
     full_df = pd.concat(station_dfs, ignore_index=True)
     print(f"Total curated records: {len(full_df)}")
     
-    # Missing values imputation on raw physical values
+    # Missing values imputation on raw physical values strictly within station scope
     for col in ["voltage_V", "current_A", "frequency_Hz", "power_factor"]:
         full_df[col] = full_df[col].fillna(full_df.groupby("station_id")[col].transform("median"))
         
@@ -63,18 +78,6 @@ def build_curated_benchmark_dataset(sample_normal_per_station: int = 15000) -> p
     full_df["target_category_idx"] = full_df[TARGET_CATEGORY].map(CATEGORY_TO_IDX)
     full_df["target_severity_idx"] = full_df[TARGET_SEVERITY].map(SEVERITY_TO_IDX)
     
-    # Construct unique event group key: station_id * 10000 + event_id
-    # Normal samples (event_id == 0) are assigned unique dummy groups to distribute them evenly
-    normal_mask = full_df["event_id"] == 0
-    full_df["group_id"] = full_df["station_id"] * 100000 + full_df["event_id"]
-    
-    # Assign distinct group IDs to normal segments (e.g. grouped by segment_id + station)
-    full_df.loc[normal_mask, "group_id"] = (
-        full_df.loc[normal_mask, "station_id"] * 100000 + 
-        full_df.loc[normal_mask, "segment_id"] * 1000 + 
-        (full_df.loc[normal_mask].index % 50)
-    )
-
     return full_df
 
 def create_leakage_free_splits(df: pd.DataFrame, test_station_id: int = None, n_splits: int = 5):
