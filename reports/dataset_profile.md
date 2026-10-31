@@ -1,121 +1,134 @@
 # Phase 1: Dataset Investigation & Profile Report
 
 **Dataset**: A Real Controlled-Fault Benchmark for Power-Anomaly Detection and Identification on IoT Edge Nodes (RCF-Power v1.0)  
+**Authors**: Thanh Trang Tran (HUIT) & Tran Nhut Tam (HCMUT, VNU-HCM)  
 **DOI**: [10.5281/zenodo.20565892](https://doi.org/10.5281/zenodo.20565892)  
-**License**: CC BY 4.0  
-**Sampling Rate**: 1 Hz (1 sample per second over 7 continuous days: 2026-02-09 to 2026-02-15)  
-**Total Records**: 1,814,400 across 3 distinct stations.
+**License**: Creative Commons Attribution 4.0 International (CC BY 4.0)  
+**Temporal Coverage**: 7 continuous 24-hour days per station @ 1 Hz  
+- Start: `2026-02-09 00:00:00`  
+- End: `2026-02-15 23:59:59` (Inclusive, 604,800 seconds per station)  
+**Total Dataset Scale**: 1,814,400 per-second observations across 3 monitoring stations.
 
 ---
 
-## 1. Station Composition & Sample Counts
+## 1. Station Composition & Sample Distribution
 
-| Station ID | Installation Context | Mean Power | Total Samples | Normal Samples | Anomaly Samples | Prevalence (%) | Distinct Fault Events |
+| Station ID | Installation & Environment Profile | Nominal Circuit Capacity | Total Seconds | Normal Samples | Anomaly Samples | Anomaly Prevalence (% of Station) | Distinct Fault Events |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Station 1** | Laboratory / Normal Baseline | ~661 W | 604,800 | 593,970 | 10,830 | 1.79% | 92 |
-| **Station 2** | Residential / Medium Load | ~685 W | 604,800 | 594,357 | 10,443 | 1.73% | 84 |
-| **Station 3** | Industrial / High Load | ~4,255 W | 604,800 | 595,931 | 8,869 | 1.47% | 78 |
-| **Total** | Multi-Environment Benchmark | — | **1,814,400** | **1,784,258** | **30,142** | **1.66%** | **254** |
+| **Station 1** | Laboratory / Normal Benchmark | ~661 W | 604,800 | 593,970 | 10,830 | 1.790% | 92 |
+| **Station 2** | Residential / Medium Load Profile | ~685 W | 604,800 | 594,357 | 10,443 | 1.727% | 84 |
+| **Station 3** | Industrial / High Inductive Load | ~4,255 W | 604,800 | 595,931 | 8,869 | 1.466% | 78 |
+| **Total** | Multi-Environment Benchmark | — | **1,814,400** | **1,784,258** | **30,142** | **1.661%** | **254** |
 
 ---
 
-## 2. Comprehensive 29-Column Schema & Data Types
+## 2. Definitive Target Taxonomies & Class Cardinalities
 
-The dataset contains exactly 29 columns per station CSV:
+To ensure complete scientific rigor and eliminate ambiguity across documentation and models:
 
-| Index | Column Name | Physical Unit / Type | Description / Role in ML Pipeline | Null % (Station 1) |
-|:---|:---|:---|:---|:---|
-| 01 | `timestamp` | Datetime (YYYY-MM-DD HH:MM:SS) | 1 Hz recording timestamp | 0.00% |
-| 02 | `sample_id` | Integer (1 ... 604800) | Sequential row counter per station | 0.00% |
-| 03 | `station_id` | Integer (1, 2, 3) | Physical monitoring node identifier | 0.00% |
-| 04 | `segment_id` | Integer (0 ... 6) | Calendar day index (enables leave-one-day-out CV) | 0.00% |
-| 05 | `voltage_V` | Volts (V) | RMS AC line voltage | 0.17% |
-| 06 | `current_A` | Amperes (A) | RMS AC load current | 0.17% |
-| 07 | `power_W` | Watts (W) | Active electrical real power | 0.00% |
-| 08 | `energy_kWh` | Kilowatt-hours (kWh) | Cumulative real energy meter register | 0.00% |
-| 09 | `frequency_Hz` | Hertz (Hz) | AC line electrical frequency (nominally 50.0 Hz) | 0.17% |
-| 10 | `power_factor` | Ratio [-1.0, 1.0] | Power factor (cos $\phi$) | 0.17% |
-| 11 | `wifi_rssi_dBm`| dBm | Wi-Fi signal strength of IoT monitoring node | 0.00% |
-| 12 | `is_interpolated`| Binary (0, 1) | Quality flag: 1 if bridged by linear interpolation | 0.00% |
-| 13 | `gap_length_s` | Seconds (s) | Duration of interpolated data communication loss | 0.00% |
-| 14 | `data_quality` | Categorical | Quality status (`real`, `interpolated`) | 0.00% |
-| 15 | `PE_m3` | Float | Permutation Entropy (embedding order m=3) | 0.02% |
-| 16 | `PE_m4` | Float | Permutation Entropy (embedding order m=4) | 0.02% |
-| 17 | `PE_m5` | Float | Permutation Entropy (embedding order m=5) | 0.02% |
-| 18 | `WPE` | Float | Weighted Permutation Entropy | 0.02% |
-| 19 | `MSPE` | Float | Multi-Scale Permutation Entropy | 0.02% |
-| 20 | `CV` | Ratio | Coefficient of Variation of power/current | 0.08% |
-| 21 | `delta_PF` | Difference | Dynamic deviation in power factor | 0.02% |
-| 22 | `SII` | Index | Spectral Irregularity Index | 0.08% |
-| 23 | `threshold` | Float | Baseline adaptive anomaly threshold | 0.00% |
-| 24 | `detector_flag` | Binary (0, 1) | Output flag of IoT baseline edge detector | 0.00% |
-| 25 | `anomaly` | Binary (0, 1) | **Target: Binary Anomaly Label** | 0.00% |
-| 26 | `anomaly_type` | Categorical (17 classes) | Specific controlled fault type (16 faults + normal) | 0.00% |
-| 27 | `fault_category`| Categorical (8 classes) | **Target A: Multiclass Fault Category** | 0.00% |
-| 28 | `severity` | Categorical (5 classes) | **Target B: Severity Grade** | 0.00% |
-| 29 | `event_id` | Integer (0 = normal, 1..N) | Controlled fault event ID for group-aware splitting | 0.00% |
+### A. Fault Category Taxonomy
+- **8 Controlled Fault Categories (Excluding Normal)**: `voltage`, `load`, `frequency`, `power_quality`, `outage`, `sensor`, `context`, `compound`.
+- **9 Total Classes for Direct Classification (Including Normal)**:
+  `['normal', 'voltage', 'load', 'frequency', 'power_quality', 'outage', 'sensor', 'context', 'compound']`
+- *Architectural Standard*: The pipeline trains on **9 classes** (Normal + 8 fault categories). When discussing fault identification exclusively on diagnosed anomalies, the 8 fault categories are reported.
+
+### B. Fault Severity Taxonomy
+- **5 Controlled Severity Grades (Excluding None)**: `incipient`, `low`, `med`, `high`, `critical`.
+- **6 Total Classes for Full Severity Assignment (Including None)**:
+  `['none', 'incipient', 'low', 'med', 'high', 'critical']`
+- `none` is the designated ground-truth severity corresponding to `normal` baseline operation.
 
 ---
 
-## 3. Ground-Truth Label Mapping Table
+## 3. Verified Class Distribution & Denominators
 
-Through scanning the 1.81M samples, the dataset implements a clean deterministic hierarchical taxonomy:
-- **16 Fine-grained Anomaly Types**
-- **8 Broad Fault Categories** (excluding normal)
-- **5 Severity Grades** (excluding none)
+The table below explicitly reports class prevalence against **both** denominators:
+1. **% of Entire Dataset** ($N = 1,814,400$)
+2. **% of Anomalous Population** ($N = 30,142$)
 
-### Anomaly Type $\rightarrow$ Fault Category Mapping
+### Fault Category Distribution
 
-| # | Anomaly Type (`anomaly_type`) | Fault Category (`fault_category`) | Physical Description / Manifestation |
-|:--|:---|:---|:---|
-| 0 | `normal` | `normal` | Standard operating conditions within nominal bands |
-| 1 | `voltage_sag` | `voltage` | Supply drop from 220 V to 180–190 V |
-| 2 | `voltage_swell` | `voltage` | Supply rise above nominal operating tolerance |
-| 3 | `flicker` | `voltage` | Repetitive short-interval voltage fluctuations |
-| 4 | `overload` | `load` | Excessive current drawing exceeding rated circuit capacity |
-| 5 | `inrush_surge` | `load` | Abrupt high-current startup spike from energizing equipment |
-| 6 | `gradual_drift` | `load` | Creeping load consumption drift indicating degradation |
-| 7 | `frequency_deviation` | `frequency` | Grid frequency stepping away from 50.0 Hz (to 49 or 51 Hz) |
-| 8 | `harmonic_distortion` | `power_quality` | Non-linear load injection, waveform distortion, elevated THD |
-| 9 | `low_power_factor` | `power_quality` | High reactive power draw from lightly loaded inductive motors |
-| 10 | `outage` | `outage` | Complete supply disconnection / opened MCCB circuit breaker |
-| 11 | `sensor_dropout` | `sensor` | Missing / zeroed sensor transmission packets |
-| 12 | `sensor_stuck` | `sensor` | Frozen measurement register holding identical values |
-| 13 | `intermittent` | `sensor` | Loose electrical wiring, intermittent contact resistance |
-| 14 | `spike_transient` | `sensor` | High-frequency impulse sensor noise |
-| 15 | `contextual_load` | `context` | Unusual energy consumption given the time/context profile |
-| 16 | `compound` | `compound` | Simultaneous concurrent multi-source faults |
+| Category | Description / Physical Phenomena | Total Count | % of Entire Dataset ($N = 1,814,400$) | % of Anomalous Subset ($N = 30,142$) |
+| :--- | :--- | :--- | :--- | :--- |
+| **`normal`** | Baseline operation within statutory grid bounds | 1,784,258 | 98.339% | — |
+| **`load`** | Overload, sudden inrush surge, creeping load drift | 6,267 | 0.345% | 20.792% |
+| **`sensor`** | Sensor dropout, register freeze (stuck), loose wiring | 4,897 | 0.270% | 16.246% |
+| **`power_quality`** | Harmonic distortion, low inductive power factor | 4,357 | 0.240% | 14.455% |
+| **`context`** | Off-schedule / contextual load spikes | 4,282 | 0.236% | 14.206% |
+| **`compound`** | Concurrent multi-source anomalies | 4,105 | 0.226% | 13.619% |
+| **`voltage`** | Voltage sags, swells, and rapid flicker | 2,984 | 0.164% | 9.900% |
+| **`outage`** | Total supply trip / opened circuit breaker | 2,174 | 0.120% | 7.213% |
+| **`frequency`** | Grid frequency stepping away from 50.0 Hz | 1,076 | 0.059% | 3.570% |
+| **Total** | 9-Class Taxonomy | **1,814,400** | **100.000%** | **100.000%** |
 
----
+### Fault Severity Grade Distribution
 
-## 4. Class Distribution Across Fault Categories & Severities
-
-### Fault Category Counts (Anomalous Samples across all 3 stations)
-1. **`normal`**: 1,784,258 (98.34%)
-2. **`load`**: 6,267 (20.8% of anomalies)
-3. **`power_quality`**: 4,357 (14.5% of anomalies)
-4. **`sensor`**: 4,897 (16.2% of anomalies)
-5. **`context`**: 4,282 (14.2% of anomalies)
-6. **`compound`**: 4,105 (13.6% of anomalies)
-7. **`voltage`**: 2,984 (9.9% of anomalies)
-8. **`outage`**: 2,174 (7.2% of anomalies)
-9. **`frequency`**: 1,076 (3.6% of anomalies)
-
-### Severity Grade Distribution
-1. **`none`**: 1,784,258 (Normal baseline)
-2. **`incipient`**: 6,959 (Early subtle anomaly signatures)
-3. **`low`**: 5,550
-4. **`med`**: 5,969
-5. **`high`**: 8,407
-6. **`critical`**: 3,257 (Severe dropouts, outages, critical overloads)
+| Severity Grade | Operational Interpretation | Total Count | % of Entire Dataset ($N = 1,814,400$) | % of Anomalous Subset ($N = 30,142$) |
+| :--- | :--- | :--- | :--- | :--- |
+| **`none`** | Nominal baseline / zero fault severity | 1,784,258 | 98.339% | — |
+| **`high`** | Severe degradation, significant voltage/load stress | 8,407 | 0.463% | 27.891% |
+| **`incipient`** | Subtle early-stage parameter drift / minor distortion | 6,959 | 0.384% | 23.087% |
+| **`med`** | Noticeable excursion requiring monitoring | 5,969 | 0.329% | 19.803% |
+| **`low`** | Minor deviation within equipment safety margin | 5,550 | 0.306% | 18.413% |
+| **`critical`** | Complete outage, communication dropout, destructive overload | 3,257 | 0.179% | 10.806% |
+| **Total** | 6-Grade Taxonomy | **1,814,400** | **100.000%** | **100.000%** |
 
 ---
 
-## 5. Group-Aware Splitting & Validation Verification
+## 4. Feature Taxonomy & Leakage Prevention Audit
 
-- **Direct Event IDs exist**: The dataset explicitly includes `event_id` (0 for normal, 1 to 92 for Station 1, 1 to 84 for Station 2, 1 to 78 for Station 3).
-- **Contiguity**: Contiguous fault samples are strictly linked to their `event_id`.
-- **Validation strategy confirmed**:
-  1. **Event-Aware Group Stratified K-Fold**: Splitting by `(station_id, event_id)` ensures whole fault events are assigned exclusively to train OR test, eliminating data leakage.
-  2. **Leave-One-Station-Out (LOSO) Generalization**: Training on Stations 1 & 2 and testing on Station 3 (and vice versa) tests the ensemble's ability to adapt to unseen industrial vs residential baseline electrical loads.
-- **Missing Value Handling**: Only raw physical sensor columns (`voltage_V`, `current_A`, `frequency_Hz`, `power_factor`) have minor dropouts (~0.17%), which can be cleanly forward-filled or median-imputed.
+To prevent any form of target leakage or contamination:
+
+| Column Name | Type / Source | Audit Decision | Justification |
+| :--- | :--- | :--- | :--- |
+| `timestamp` | Datetime (1 Hz) | **Metadata / Index** | Used for temporal alignment; not an input feature. |
+| `sample_id` | Integer (1..604800) | **Excluded** | Arbitrary sequential row identifier. |
+| `station_id` | Integer (1, 2, 3) | **Grouping Variable** | Used for Leave-One-Station-Out (LOSO) evaluation. |
+| `segment_id` | Integer (0..6) | **Grouping Variable** | Calendar-day index (enables Leave-One-Day-Out splits). |
+| `event_id` | Integer (0..N) | **Grouping Variable** | Identifies contiguous fault episodes; **strictly excluded from inputs**. |
+| `anomaly` | Binary (0, 1) | **Target** | Binary anomaly label; excluded from input predictors. |
+| `anomaly_type`| Categorical (17 classes) | **Excluded** | Fine-grained label used only for verification. |
+| `fault_category`| Categorical (9 classes) | **Target A** | Multi-class target variable. |
+| `severity` | Categorical (6 classes) | **Target B** | Severity target variable. |
+| `detector_flag`| Binary (0, 1) | **Excluded** | Output of author's baseline edge detector (potential target leakage). |
+| `threshold` | Float | **Excluded** | Author baseline dynamic threshold; not an intrinsic sensor measurement. |
+| `data_quality` | Categorical | **Excluded** | Target indicator (`real` vs `interpolated`). |
+| `is_interpolated` | Binary | **Excluded** | Telemetry artifact indicator. |
+| `gap_length_s` | Seconds | **Excluded** | Telemetry artifact indicator. |
+| `wifi_rssi_dBm`| dBm | **Excluded** | Radio signal strength; specific to physical deployment node. |
+| `voltage_V` | Volts (RMS) | **Input Feature** | Directly measured 1 Hz line voltage. |
+| `current_A` | Amperes (RMS) | **Input Feature** | Directly measured 1 Hz load current. |
+| `power_W` | Watts (Active) | **Input Feature** | Directly measured active electrical power. |
+| `energy_kWh` | kWh (Register) | **Excluded** | Monotonically accumulating meter counter. |
+| `frequency_Hz`| Hertz | **Input Feature** | Directly measured AC line frequency. |
+| `power_factor`| Ratio [-1, 1] | **Input Feature** | Directly measured $\cos \phi$. |
+| `PE_m3..m5` | Float | **Input Feature** | Permutation entropy (signal complexity indicator). |
+| `WPE`, `MSPE` | Float | **Input Feature** | Weighted & Multi-Scale Permutation Entropy. |
+| `CV` | Ratio | **Input Feature** | Coefficient of variation of power envelope. |
+| `delta_PF` | Difference | **Input Feature** | Dynamic deviation in power factor. |
+| `SII` | Index | **Input Feature** | Spectral irregularity index. |
+| `apparent_power_VA` | VA ($V \cdot I$) | **Engineered Input** | Calculated AC apparent power. |
+| `reactive_power_var`| VAR ($\sqrt{S^2 - P^2}$) | **Engineered Input** | Calculated AC reactive power. |
+| `power_active_apparent_ratio` | Ratio | **Engineered Input** | Efficiency / distortion proxy ($P / S$). |
+| `voltage_deviation_pct` | % from 220V | **Engineered Input** | Percentage deviation from nominal 220V grid standard. |
+| `frequency_deviation_pct`| % from 50Hz | **Engineered Input** | Percentage deviation from nominal 50.0 Hz grid standard. |
+
+---
+
+## 5. Group Splitting & Normal Chunking Strategy
+
+1. **Fault Contiguity**: Verified across all 3 station files. Each non-zero `event_id` represents a contiguous, unbroken temporal window of controlled fault induction.
+2. **Normal Data Grouping**: In raw telemetry, all normal rows share `event_id = 0`. Assigning all normal rows to one group would make group-aware cross-validation impossible.
+   - **Implemented Solution**: Normal observations are segmented into temporal blocks based on `(station_id, segment_id, time_block)`. This ensures normal operating windows are distributed across folds in a balanced, leakage-free structure.
+3. **Leave-One-Station-Out (LOSO) Validation**:
+   - Station 1: ~661 W baseline (Laboratory)
+   - Station 2: ~685 W baseline (Residential)
+   - Station 3: ~4,255 W baseline (Industrial)
+   - Testing on Station 3 while training on Stations 1 & 2 provides the ultimate test of cross-environment generalization.
+
+---
+
+## 6. Preprocessing & Imputation Protocols
+
+- **No Cross-Event Forward Filling**: Missing values (~0.17% in physical sensor channels) are imputed strictly within each continuous operating window. Imputation never bridges across event boundaries or during actual outage events.
+- **Fitting Restrictions**: Preprocessor scalers (`StandardScaler`) are fit **only on training partitions** and then applied to validation/test sets to guarantee zero look-ahead bias.
