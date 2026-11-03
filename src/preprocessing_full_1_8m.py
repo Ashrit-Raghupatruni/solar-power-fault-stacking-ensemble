@@ -1,12 +1,10 @@
 """
-Full-scale (1.81 Million data points) leakage-free data processing pipeline.
-Loads all 3 station CSVs without downsampling:
-- Station 1: 604,800 rows
-- Station 2: 604,800 rows
-- Station 3: 604,800 rows
-Total: 1,814,400 per-second observations.
-
-Employs memory-efficient float32 downcasting and group-aware splitting by (station_id, event_id, segment_id).
+Leak-Free 1.81M Dataset Preprocessing Module.
+Methodological Fixes Implemented:
+1. Zero Data Leakage: Splits data BEFORE fitting missing-value imputers.
+2. Fits SimpleImputer strictly on the training partition; transforms test independently.
+3. Enforces boundary-safe temporal derivative calculations.
+4. Fits the benchmark RobustScaler strictly on the training partition.
 """
 import os
 import gc
@@ -15,12 +13,14 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.preprocessing import RobustScaler
+from sklearn.impute import SimpleImputer
 from src.config import (
     STATION_FILES, PROCESSED_DATA_DIR, MODELS_DIR,
     FEATURE_COLS, TARGET_CATEGORY, TARGET_SEVERITY,
     CATEGORY_TO_IDX, SEVERITY_TO_IDX, RAW_SEVERITY_MAP, RANDOM_STATE
 )
 from src.feature_engineering import add_electrical_features
+from src.data_loader import verify_dataset_files
 
 DTYPES = {
     "sample_id": "int32",
@@ -49,28 +49,30 @@ DTYPES = {
     "event_id": "int32"
 }
 
-def load_full_1_8m_dataset(normal_block_length_s: int = 1200) -> pd.DataFrame:
+def load_and_split_leak_free(normal_block_length_s: int = 1200):
     """
-    Loads the entire 1,814,400-row benchmark from all three stations:
-    - Retains 100% of all data points.
-    - Groups normal records into contiguous chronological 20-minute (1200s) time blocks
-      to enable valid group-aware cross-validation without temporal fracturing.
+    Loads raw station telemetry, creates group-aware split BEFORE imputation,
+    and returns properly isolated train and test partitions.
     """
+    verify_dataset_files(raise_error=True)
     station_dfs = []
     
     for st_id, file_path in STATION_FILES.items():
-        print(f"Loading complete 604,800 records from {file_path.name}...")
+        print(f"Loading {file_path.name}...")
         df_st = pd.read_csv(file_path, dtype=DTYPES)
         
-        # Standardize raw severity 'med' -> canonical 'medium'
+        # Sort chronologically by calendar day and timestamp
+        df_st = df_st.sort_values(by=["segment_id", "sample_id"]).reset_index(drop=True)
+        
+        # Standardize raw severity
         df_st[TARGET_SEVERITY] = df_st[TARGET_SEVERITY].map(RAW_SEVERITY_MAP).fillna(df_st[TARGET_SEVERITY])
         
-        # 1. Group IDs for Anomalies
+        # 1. Group IDs for Anomalies (per event and station)
         anom_mask = df_st["anomaly"] == 1
         df_st["group_id"] = np.int64(0)
-        df_st.loc[anom_mask, "group_id"] = (np.int64(st_id) * 100000 + df_st.loc[anom_mask, "event_id"].astype("int64"))
+        df_st.loc[anom_mask, "group_id"] = np.int64(st_id) * 100000 + df_st.loc[anom_mask, "event_id"].astype("int64")
         
-        # 2. Group IDs for Normal Contiguous Time Blocks
+        # 2. Group IDs for Normal Contiguous Time Blocks (20-minute chunks)
         norm_mask = df_st["anomaly"] == 0
         time_block = (df_st.loc[norm_mask, "sample_id"].astype("int64") // normal_block_length_s)
         seg_id_int64 = df_st.loc[norm_mask, "segment_id"].astype("int64")
@@ -80,72 +82,67 @@ def load_full_1_8m_dataset(normal_block_length_s: int = 1200) -> pd.DataFrame:
             (time_block % 500)
         )
         
-        # Missing values imputation strictly on physical channels
-        for col in ["voltage_V", "current_A", "frequency_Hz", "power_factor"]:
-            median_val = df_st[col].median()
-            df_st[col] = df_st[col].fillna(median_val)
-            
-        for col in ["PE_m3", "PE_m4", "PE_m5", "WPE", "MSPE", "CV", "delta_PF", "SII"]:
-            df_st[col] = df_st[col].fillna(0.0)
-            
-        # Add upgraded dynamic electrical features
+        # Boundary-safe dynamic feature generation
         df_st = add_electrical_features(df_st)
         
         station_dfs.append(df_st)
         gc.collect()
 
     full_df = pd.concat(station_dfs, ignore_index=True)
-    print(f"\nSuccessfully assembled full dataset! Total records: {len(full_df):,}")
-    
-    # Encode targets
     full_df["target_category_idx"] = full_df[TARGET_CATEGORY].map(CATEGORY_TO_IDX).astype("int8")
     full_df["target_severity_idx"] = full_df[TARGET_SEVERITY].map(SEVERITY_TO_IDX).astype("int8")
     
-    return full_df
-
-def create_full_leakage_free_splits(df: pd.DataFrame, n_splits: int = 5):
-    """
-    Creates an 80/20 train/test split on the full 1.81M records using StratifiedGroupKFold
-    guaranteeing zero event leakage.
-    """
-    print("Splitting full 1.81M dataset using StratifiedGroupKFold...")
-    sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_STATE)
-    train_idx, test_idx = next(sgkf.split(df, df["target_category_idx"], df["group_id"]))
+    # Stratified Group Split
+    print("\nSplitting into train/test using StratifiedGroupKFold...")
+    sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    train_idx, test_idx = next(sgkf.split(full_df, full_df["target_category_idx"], full_df["group_id"]))
     
-    train_df = df.iloc[train_idx].copy()
-    test_df = df.iloc[test_idx].copy()
+    train_df = full_df.iloc[train_idx].copy()
+    test_df = full_df.iloc[test_idx].copy()
+    del full_df
+    gc.collect()
     
+    # Zero leakage assertion
     train_fault_events = set(train_df[train_df["event_id"] != 0]["group_id"].unique())
     test_fault_events = set(test_df[test_df["event_id"] != 0]["group_id"].unique())
-    overlap = train_fault_events.intersection(test_fault_events)
-    assert len(overlap) == 0, f"DATA LEAKAGE DETECTED! Overlapping fault event groups: {overlap}"
+    assert len(train_fault_events.intersection(test_fault_events)) == 0, "Data leakage detected across splits!"
+    print(f"Zero event leakage verified! Train events: {len(train_fault_events)}, Test events: {len(test_fault_events)}")
     
-    print(f"Zero event leakage verified on full dataset! Train events: {len(train_fault_events)}, Test events: {len(test_fault_events)}")
-    print(f"Train set: {len(train_df):,} samples | Test set: {len(test_df):,} samples")
+    # STRICT LEAK-FREE IMPUTATION: Fit median imputer on train partition ONLY
+    print("Fitting missing-value imputer strictly on training partition...")
+    impute_cols = ["voltage_V", "current_A", "frequency_Hz", "power_factor"]
+    imputer = SimpleImputer(strategy="median")
+    imputer.fit(train_df[impute_cols])
+    
+    train_df[impute_cols] = imputer.transform(train_df[impute_cols])
+    test_df[impute_cols] = imputer.transform(test_df[impute_cols])
+    
+    for col in ["PE_m3", "PE_m4", "PE_m5", "WPE", "MSPE", "CV", "delta_PF", "SII"]:
+        train_df[col] = train_df[col].fillna(0.0)
+        test_df[col] = test_df[col].fillna(0.0)
+        
+    joblib.dump(imputer, MODELS_DIR / "preprocessors" / "imputer.pkl")
+    print("Saved train-fitted SimpleImputer to models/preprocessors/imputer.pkl")
     
     return train_df, test_df
 
-def run_full_1_8m_preprocessing(save_parquet: bool = True):
-    """Processes all 1.81M rows and saves memory-optimized Parquet or CSV partitions."""
-    df = load_full_1_8m_dataset()
-    train_df, test_df = create_full_leakage_free_splits(df)
+def run_full_1_8m_preprocessing():
+    train_df, test_df = load_and_split_leak_free()
     
-    # Save partitions
     train_csv = PROCESSED_DATA_DIR / "train.csv"
     test_csv = PROCESSED_DATA_DIR / "test.csv"
     
-    print("Writing train and test datasets...")
+    print("Writing leakage-free processed partitions...")
     train_df.to_csv(train_csv, index=False)
     test_df.to_csv(test_csv, index=False)
-    print(f"Saved: {train_csv} ({os.path.getsize(train_csv) / 1e6:.1f} MB)")
-    print(f"Saved: {test_csv} ({os.path.getsize(test_csv) / 1e6:.1f} MB)")
+    print(f"Saved: {train_csv} ({len(train_df):,} rows)")
+    print(f"Saved: {test_csv} ({len(test_df):,} rows)")
     
-    # Fit and save RobustScaler
+    # Fit final RobustScaler strictly on train partition
     scaler = RobustScaler()
     scaler.fit(train_df[FEATURE_COLS])
-    scaler_path = MODELS_DIR / "preprocessors" / "scaler.pkl"
-    joblib.dump(scaler, scaler_path)
-    print(f"Fitted RobustScaler on full train set and saved to {scaler_path}")
+    joblib.dump(scaler, MODELS_DIR / "preprocessors" / "scaler.pkl")
+    print("Saved train-fitted RobustScaler to models/preprocessors/scaler.pkl")
 
 if __name__ == "__main__":
     run_full_1_8m_preprocessing()
