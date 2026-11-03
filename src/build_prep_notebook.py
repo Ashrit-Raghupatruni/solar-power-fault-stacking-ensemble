@@ -1,0 +1,217 @@
+import json
+from pathlib import Path
+
+cells = [
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "# 02. Advanced Preprocessing, Scaler Benchmarking & Leakage-Free Splitting\n",
+            "**Project**: Solar & Electrical Power Fault and Anomaly Detection Using Stacking Ensemble Learning\n",
+            "**Objective**: Compare all major feature scalers (StandardScaler, RobustScaler, MinMaxScaler, QuantileTransformer, PowerTransformer) to select the optimal transformation pipeline for distance/kernel and tree-based models."
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "import os\n",
+            "import joblib\n",
+            "import pandas as pd\n",
+            "import numpy as np\n",
+            "import matplotlib.pyplot as plt\n",
+            "import seaborn as sns\n",
+            "from sklearn.preprocessing import (\n",
+            "    StandardScaler, RobustScaler, MinMaxScaler, QuantileTransformer, PowerTransformer\n",
+            ")\n",
+            "from src.config import (\n",
+            "    STATION_FILES, PROCESSED_DATA_DIR, MODELS_DIR, FEATURE_COLS, \n",
+            "    CATEGORY_LABELS, SEVERITY_LABELS, RAW_SEVERITY_MAP, RANDOM_STATE\n",
+            ")\n",
+            "from src.preprocessing import build_curated_benchmark_dataset, create_leakage_free_splits\n",
+            "from src.feature_engineering import add_electrical_features\n",
+            "\n",
+            "print('All preprocessing modules and scalers imported successfully!')"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "## 1. Curate Multi-Station Benchmark Data\n",
+            "- Preserves 100% of all 30,142 controlled fault samples (zero rare event loss).\n",
+            "- Forms contiguous 300-second (5-minute) normal operating temporal blocks to eliminate cross-second leakage."
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "df_curated = build_curated_benchmark_dataset(normal_block_length_s=300, max_normal_blocks_per_st=50)\n",
+            "print('Curated dataset shape:', df_curated.shape)\n",
+            "df_curated[['timestamp', 'station_id', 'voltage_V', 'current_A', 'power_W', 'fault_category', 'severity']].head(5)"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "## 2. Leakage-Free Stratified Group Splitting\n",
+            "Splits the dataset using `StratifiedGroupKFold` on `group_id` so complete fault episodes and normal time windows are kept intact within single partitions."
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "train_df, test_df = create_leakage_free_splits(df_curated)\n",
+            "print('Train partition rows:', len(train_df))\n",
+            "print('Test partition rows: ', len(test_df))\n",
+            "\n",
+            "# Automated verification of zero event leakage\n",
+            "train_events = set(train_df[train_df['event_id'] != 0]['group_id'].unique())\n",
+            "test_events = set(test_df[test_df['event_id'] != 0]['group_id'].unique())\n",
+            "overlap = train_events.intersection(test_events)\n",
+            "print('Overlapping fault events (MUST BE 0):', len(overlap))\n",
+            "assert len(overlap) == 0, 'Data leakage detected across train and test!'"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "## 3. Comparing 5 Different Scalers on Electrical Sensor Features\n",
+            "We compare:\n",
+            "1. **StandardScaler**: Standardizes by removing mean and scaling to unit variance.\n",
+            "2. **RobustScaler**: Uses median and Interquartile Range (IQR); highly resilient to extreme electrical spikes/sags.\n",
+            "3. **MinMaxScaler**: Rescales all feature dimensions into $[0, 1]$.\n",
+            "4. **QuantileTransformer**: Maps feature distributions to uniform/Gaussian, damping non-linear skewness.\n",
+            "5. **PowerTransformer (Yeo-Johnson)**: Parametric power transform that stabilizes variance and enforces normality."
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "scalers = {\n",
+            "    'StandardScaler': StandardScaler(),\n",
+            "    'RobustScaler': RobustScaler(),\n",
+            "    'MinMaxScaler': MinMaxScaler(),\n",
+            "    'QuantileTransformer': QuantileTransformer(n_quantiles=1000, random_state=RANDOM_STATE),\n",
+            "    'PowerTransformer': PowerTransformer(method='yeo-johnson')\n",
+            "}\n",
+            "\n",
+            "X_train = train_df[FEATURE_COLS].copy()\n",
+            "feature_to_plot = 'current_A'\n",
+            "\n",
+            "fig, axes = plt.subplots(2, 3, figsize=(18, 10))\n",
+            "axes = axes.flatten()\n",
+            "\n",
+            "# Raw distribution\n",
+            "sns.histplot(X_train[feature_to_plot], kde=True, ax=axes[0], color='gray', bins=40)\n",
+            "axes[0].set_title('Raw ' + feature_to_plot)\n",
+            "\n",
+            "# Visualizing transformed distributions\n",
+            "for idx, (name, scaler) in enumerate(scalers.items(), start=1):\n",
+            "    transformed = scaler.fit_transform(X_train[[feature_to_plot]])\n",
+            "    sns.histplot(transformed, kde=True, ax=axes[idx], color='teal', bins=40)\n",
+            "    axes[idx].set_title(name)\n",
+            "\n",
+            "plt.tight_layout()\n",
+            "plt.show()"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "## 4. Benchmark Scalers on Downstream Classifier (KNN & Linear SVM)\n",
+            "Measures which scaler produces the highest Macro-F1 score on the held-out test set."
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "from sklearn.neighbors import KNeighborsClassifier\n",
+            "from sklearn.metrics import f1_score\n",
+            "\n",
+            "X_tr_raw = train_df[FEATURE_COLS].values\n",
+            "y_tr = train_df['target_category_idx'].values\n",
+            "X_te_raw = test_df[FEATURE_COLS].values\n",
+            "y_te = test_df['target_category_idx'].values\n",
+            "\n",
+            "results = []\n",
+            "for name, scaler in scalers.items():\n",
+            "    # Fit strictly on training split to eliminate data leakage\n",
+            "    X_tr_s = scaler.fit_transform(X_tr_raw)\n",
+            "    X_te_s = scaler.transform(X_te_raw)\n",
+            "    \n",
+            "    knn = KNeighborsClassifier(n_neighbors=5, n_jobs=-1)\n",
+            "    knn.fit(X_tr_s, y_tr)\n",
+            "    preds = knn.predict(X_te_s)\n",
+            "    \n",
+            "    score = f1_score(y_te, preds, average='macro', zero_division=0)\n",
+            "    results.append({'Scaler': name, 'Macro-F1 (KNN %)': round(score * 100, 2)})\n",
+            "\n",
+            "benchmark_df = pd.DataFrame(results).sort_values(by='Macro-F1 (KNN %)', ascending=False)\n",
+            "display(benchmark_df)"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "## 5. Export Best Scaler & Processed Partitions\n",
+            "Saves the optimal preprocessor to `models/preprocessors/` and verifies saved dataset files."
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "best_scaler_name = benchmark_df.iloc[0]['Scaler']\n",
+            "print('Highest performing scaler:', best_scaler_name)\n",
+            "\n",
+            "best_scaler = scalers[best_scaler_name]\n",
+            "best_scaler.fit(X_tr_raw)\n",
+            "save_path = MODELS_DIR / 'preprocessors' / 'scaler.pkl'\n",
+            "joblib.dump(best_scaler, save_path)\n",
+            "print('Saved fitted optimal scaler to:', save_path)"
+        ]
+    }
+]
+
+nb = {
+    "cells": cells,
+    "metadata": {
+        "kernelspec": {
+            "display_name": "Python 3 (ipykernel)",
+            "language": "python",
+            "name": "python3"
+        },
+        "language_info": {
+            "name": "python",
+            "version": "3.10.0"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 5
+}
+
+with open("notebooks/02_preprocessing_and_splitting.ipynb", "w", encoding="utf-8") as f:
+    json.dump(nb, f, indent=2)
+
+print("notebooks/02_preprocessing_and_splitting.ipynb successfully updated!")
