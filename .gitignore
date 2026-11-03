@@ -4,6 +4,10 @@ Database/*.csv
 *.csv.zip
 *.zip
 
+# Ignore full-scale 1.8M processed partitions (exceeds GitHub 100MB limit)
+data/processed/train.csv
+data/processed/test.csv
+
 # Ignore large temporary files
 temp.pkl
 *.tmp

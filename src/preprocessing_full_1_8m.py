@@ -67,17 +67,18 @@ def load_full_1_8m_dataset(normal_block_length_s: int = 1200) -> pd.DataFrame:
         
         # 1. Group IDs for Anomalies
         anom_mask = df_st["anomaly"] == 1
-        df_st["group_id"] = 0
-        df_st.loc[anom_mask, "group_id"] = (st_id * 100000 + df_st.loc[anom_mask, "event_id"]).astype("int64")
+        df_st["group_id"] = np.int64(0)
+        df_st.loc[anom_mask, "group_id"] = (np.int64(st_id) * 100000 + df_st.loc[anom_mask, "event_id"].astype("int64"))
         
         # 2. Group IDs for Normal Contiguous Time Blocks
         norm_mask = df_st["anomaly"] == 0
-        time_block = df_st.loc[norm_mask, "sample_id"] // normal_block_length_s
+        time_block = (df_st.loc[norm_mask, "sample_id"].astype("int64") // normal_block_length_s)
+        seg_id_int64 = df_st.loc[norm_mask, "segment_id"].astype("int64")
         df_st.loc[norm_mask, "group_id"] = (
-            st_id * 100000 + 50000 + 
-            (df_st.loc[norm_mask, "segment_id"] * 1000) + 
+            np.int64(st_id) * 100000 + 50000 + 
+            (seg_id_int64 * 1000) + 
             (time_block % 500)
-        ).astype("int64")
+        )
         
         # Missing values imputation strictly on physical channels
         for col in ["voltage_V", "current_A", "frequency_Hz", "power_factor"]:
