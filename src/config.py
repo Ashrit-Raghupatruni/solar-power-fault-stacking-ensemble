@@ -1,9 +1,10 @@
 """
 Global configuration for Solar & Electrical Power Fault and Anomaly Detection.
+Standardizes paths, features, target taxonomies, and canonical mappings.
 """
 from pathlib import Path
 
-# Paths
+# Base Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "Database" / "controlled-fault-benchmark-v1.0"
 PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"
@@ -12,7 +13,14 @@ REPORTS_DIR = BASE_DIR / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 METRICS_DIR = REPORTS_DIR / "metrics"
 
-for p in [PROCESSED_DATA_DIR, MODELS_DIR / "fault_category", MODELS_DIR / "fault_severity", MODELS_DIR / "preprocessors", FIGURES_DIR, METRICS_DIR]:
+for p in [
+    PROCESSED_DATA_DIR,
+    MODELS_DIR / "fault_category",
+    MODELS_DIR / "fault_severity",
+    MODELS_DIR / "preprocessors",
+    FIGURES_DIR,
+    METRICS_DIR
+]:
     p.mkdir(parents=True, exist_ok=True)
 
 # Station CSV files
@@ -22,7 +30,7 @@ STATION_FILES = {
     3: DATA_DIR / "station3_high_features.csv"
 }
 
-# Raw physical sensor telemetry features
+# 1. Raw physical sensor telemetry features
 RAW_SENSOR_FEATURES = [
     "voltage_V",
     "current_A",
@@ -31,7 +39,7 @@ RAW_SENSOR_FEATURES = [
     "power_factor"
 ]
 
-# Edge precomputed statistical / non-linear features in Zenodo benchmark
+# 2. Edge precomputed non-linear & statistical features
 EDGE_FEATURES = [
     "PE_m3",
     "PE_m4",
@@ -43,14 +51,20 @@ EDGE_FEATURES = [
     "SII"
 ]
 
-# Engineered domain features
+# 3. Upgraded Domain Electrical & Dynamic Temporal Features
 ENGINEERED_FEATURES = [
     "apparent_power_VA",
     "reactive_power_var",
     "power_active_apparent_ratio",
     "voltage_deviation_pct",
     "frequency_deviation_pct",
-    "current_per_watt"
+    "current_per_watt",
+    # Dynamic transient & rate-of-change indicators
+    "d_voltage_dt",
+    "d_current_dt",
+    "d_power_dt",
+    "power_factor_stability",
+    "impedance_proxy_ohm"
 ]
 
 FEATURE_COLS = RAW_SENSOR_FEATURES + EDGE_FEATURES + ENGINEERED_FEATURES
@@ -60,7 +74,7 @@ TARGET_CATEGORY = "fault_category"
 TARGET_SEVERITY = "severity"
 TARGET_BINARY = "anomaly"
 
-# 8 Multiclass Fault Categories (+ normal)
+# 9 Multiclass Fault Categories (8 Controlled Anomalies + Normal)
 CATEGORY_LABELS = [
     "normal",
     "voltage",
@@ -73,9 +87,7 @@ CATEGORY_LABELS = [
     "compound"
 ]
 
-# Severity grades (+ none)
-# In raw CSVs: 'none', 'incipient', 'low', 'med', 'high', 'critical'
-# Canonical standardized internal representation: 'medium' mapped from raw 'med'
+# 6 Severity grades (5 Non-zero Severity Grades + None)
 SEVERITY_LABELS = [
     "none",
     "incipient",
@@ -96,7 +108,6 @@ RAW_SEVERITY_MAP = {
     "critical": "critical"
 }
 
-# Categorical mapping dictionaries
 CATEGORY_TO_IDX = {cat: idx for idx, cat in enumerate(CATEGORY_LABELS)}
 IDX_TO_CATEGORY = {idx: cat for cat, idx in CATEGORY_TO_IDX.items()}
 
