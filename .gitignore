@@ -7,6 +7,16 @@ Database/*.csv
 # Ignore full-scale 1.8M processed partitions (exceeds GitHub 100MB limit)
 data/processed/train.csv
 data/processed/test.csv
+data/raw/
+
+# Ignore large model checkpoint files (recommend storing via release artifacts / LFS)
+models/**/*.pkl
+models/*.pkl
+*.pkl.gz
+
+# Keep lightweight essential preprocessors and meta files if desired
+!models/preprocessors/scaler.pkl
+!models/**/meta.pkl
 
 # Ignore large temporary files
 temp.pkl
@@ -21,6 +31,14 @@ __pycache__/
 venv/
 env/
 .env
+
+# Testing & coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Matplotlib cache
+.matplotlib/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/

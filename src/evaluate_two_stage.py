@@ -22,8 +22,15 @@ from src.config import (
     PROCESSED_DATA_DIR, MODELS_DIR, FIGURES_DIR, METRICS_DIR,
     FEATURE_COLS, STAGE2_FAULT_CATEGORIES, STAGE2_FAULT_SEVERITIES
 )
+from src.feature_engineering import add_electrical_features
 from src.model_registry import MODEL_REGISTRY
 from src.train import align_probabilities
+
+def ensure_features_present(df: pd.DataFrame) -> pd.DataFrame:
+    missing = [c for c in FEATURE_COLS if c not in df.columns]
+    if missing:
+        df = add_electrical_features(df)
+    return df
 
 def load_two_stage_pipeline():
     """Loads all components required for end-to-end inference."""
@@ -70,7 +77,7 @@ def evaluate_cascaded_system():
     print("EVALUATING TWO-STAGE CASCADED SYSTEM ON HELD-OUT TEST PARTITION")
     print("="*80)
     
-    test_df = pd.read_csv(test_path)
+    test_df = ensure_features_present(pd.read_csv(test_path))
     pipe = load_two_stage_pipeline()
     scaler = pipe["scaler"]
     
@@ -180,11 +187,13 @@ def evaluate_cascaded_system():
     sev_macro_f1 = f1_score(y_true_sev_raw, final_pred_sev, average="macro", zero_division=0)
     sev_b_acc = balanced_accuracy_score(y_true_sev_raw, final_pred_sev)
     
-    # Critical fault safety metric
-    critical_mask = y_true_sev_raw == "critical"
+    # Critical fault safety metric: strictly requires prediction == 'critical'
+    critical_mask = (y_true_sev_raw == "critical")
     if np.sum(critical_mask) > 0:
-        crit_detected = np.sum((final_pred_sev[critical_mask] != "none"))
-        crit_fnr = (1.0 - (crit_detected / np.sum(critical_mask))) * 100
+        crit_tp = np.sum(final_pred_sev[critical_mask] == "critical")
+        crit_fn = np.sum(final_pred_sev[critical_mask] != "critical")
+        crit_recall = crit_tp / np.sum(critical_mask)
+        crit_fnr = (1.0 - crit_recall) * 100.0
     else:
         crit_fnr = 0.0
 
@@ -192,7 +201,35 @@ def evaluate_cascaded_system():
     print(f"  Raw Overall Accuracy:        {sev_acc*100:.2f}%")
     print(f"  Macro-F1 Score:              {sev_macro_f1*100:.2f}%")
     print(f"  Balanced Accuracy:           {sev_b_acc*100:.2f}%")
-    print(f"  Critical Fault Miss Rate (FNR): {crit_fnr:.2f}%")
+    print(f"  Critical Fault Miss Rate (Strict FNR): {crit_fnr:.2f}%")
+
+    # Generate and export normalized confusion matrices
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Category Confusion Matrix
+    cm_cat = confusion_matrix(y_true_cat_raw, final_pred_cat, labels=all_cat_labels, normalize="true")
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm_cat, annot=True, fmt=".2f", cmap="Blues",
+                xticklabels=all_cat_labels, yticklabels=all_cat_labels)
+    plt.title("Cascaded End-to-End Fault Category Normalized Confusion Matrix")
+    plt.xlabel("Predicted Category")
+    plt.ylabel("True Category")
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / "cascaded_category_confusion_matrix.png", dpi=200)
+    plt.close()
+
+    # 2. Severity Confusion Matrix
+    cm_sev = confusion_matrix(y_true_sev_raw, final_pred_sev, labels=all_sev_labels, normalize="true")
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm_sev, annot=True, fmt=".2f", cmap="Oranges",
+                xticklabels=all_sev_labels, yticklabels=all_sev_labels)
+    plt.title("Cascaded End-to-End Fault Severity Normalized Confusion Matrix")
+    plt.xlabel("Predicted Severity")
+    plt.ylabel("True Severity")
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / "cascaded_severity_confusion_matrix.png", dpi=200)
+    plt.close()
+    print(f"Saved normalized confusion matrices to {FIGURES_DIR}")
     
     # Save metrics summary
     metrics_summary = pd.DataFrame([{

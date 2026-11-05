@@ -1,0 +1,2 @@
+architecture,stage1_threshold,stage1_recall,stage1_fnr,cat_overall_acc,cat_macro_f1,cat_balanced_acc,sev_overall_acc,sev_macro_f1,sev_balanced_acc,critical_fnr
+Two-Stage Cascaded,0.35,81.73,18.27,84.98,35.12,68.91,84.44,20.2,36.22,62.95

@@ -75,7 +75,11 @@ ENGINEERED_FEATURES = [
     "power_to_baseline_ratio"
 ]
 
-FEATURE_COLS = RAW_SENSOR_FEATURES + EDGE_FEATURES + ENGINEERED_FEATURES
+# Operational Features: Guaranteed to be present identically in training, batch testing, and 1 Hz streaming inference
+OPERATIONAL_FEATURE_COLS = RAW_SENSOR_FEATURES + ENGINEERED_FEATURES
+
+# Full Feature Columns (including offline edge statistics when available)
+FEATURE_COLS = OPERATIONAL_FEATURE_COLS
 
 # Target definitions
 TARGET_CATEGORY = "fault_category"

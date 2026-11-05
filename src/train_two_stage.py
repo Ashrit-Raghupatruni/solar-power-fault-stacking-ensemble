@@ -24,8 +24,16 @@ from src.config import (
     PROCESSED_DATA_DIR, MODELS_DIR, FEATURE_COLS, RANDOM_STATE,
     STAGE2_CAT_TO_IDX, STAGE2_SEV_TO_IDX
 )
+from src.feature_engineering import add_electrical_features
 from src.model_registry import MODEL_REGISTRY
 from src.train import align_probabilities
+
+def ensure_features_present(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensures dynamic rolling and derivative features exist in dataframe."""
+    missing = [c for c in FEATURE_COLS if c not in df.columns]
+    if missing:
+        df = add_electrical_features(df)
+    return df
 
 def train_stage1_binary_detector():
     """
@@ -36,9 +44,13 @@ def train_stage1_binary_detector():
     print("STAGE 1: TRAINING BINARY ANOMALY FILTER (Normal vs Anomaly)")
     print("="*80)
     
-    train_df = pd.read_csv(PROCESSED_DATA_DIR / "train.csv")
-    test_df = pd.read_csv(PROCESSED_DATA_DIR / "test.csv")
-    scaler = joblib.load(MODELS_DIR / "preprocessors" / "scaler.pkl")
+    train_df = ensure_features_present(pd.read_csv(PROCESSED_DATA_DIR / "train.csv"))
+    test_df = ensure_features_present(pd.read_csv(PROCESSED_DATA_DIR / "test.csv"))
+    
+    # Fit and save fresh RobustScaler on the operational feature set
+    scaler = RobustScaler()
+    scaler.fit(train_df[FEATURE_COLS].values.astype(np.float32))
+    joblib.dump(scaler, MODELS_DIR / "preprocessors" / "scaler.pkl")
     
     X_train = train_df[FEATURE_COLS].values.astype(np.float32)
     y_train = (train_df["fault_category"] != "normal").astype(int).values
@@ -125,8 +137,8 @@ def train_stage2_multiclass_pipeline(target_type: str = "category"):
     print(f"STAGE 2: TRAINING SPECIALIZED MULTI-CLASS IDENTIFIER ({target_type.upper()})")
     print("="*80)
     
-    train_df = pd.read_csv(PROCESSED_DATA_DIR / "train.csv")
-    test_df = pd.read_csv(PROCESSED_DATA_DIR / "test.csv")
+    train_df = ensure_features_present(pd.read_csv(PROCESSED_DATA_DIR / "train.csv"))
+    test_df = ensure_features_present(pd.read_csv(PROCESSED_DATA_DIR / "test.csv"))
     scaler = joblib.load(MODELS_DIR / "preprocessors" / "scaler.pkl")
     
     # Filter strictly to anomalous samples
