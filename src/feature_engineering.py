@@ -55,9 +55,15 @@ def add_electrical_features(df: pd.DataFrame, previous_state: dict = None) -> pd
     df["impedance_proxy_ohm"] = (v_abs / i_denom).fillna(999.0).clip(0.0, 1000.0).round(4)
 
     # 9. Boundary-Safe Causal Temporal Derivatives & Rolling Volatility
-    if "segment_id" in df.columns and "event_id" in df.columns and "station_id" in df.columns:
+    # Group by group_id if available (or station_id + segment_id + event_id) to strictly respect partition boundaries
+    if "group_id" in df.columns:
+        group_keys = ["group_id"]
+    elif "segment_id" in df.columns and "event_id" in df.columns and "station_id" in df.columns:
         group_keys = ["station_id", "segment_id", "event_id"]
-        
+    else:
+        group_keys = None
+
+    if group_keys is not None:
         # Temporal derivatives
         df["d_voltage_dt"] = df.groupby(group_keys)["voltage_V"].diff().fillna(0.0).abs().round(4)
         df["d_current_dt"] = df.groupby(group_keys)["current_A"].diff().fillna(0.0).abs().round(4)

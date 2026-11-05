@@ -28,21 +28,22 @@ This project builds an intelligent anomaly detection system using the **Zenodo C
    - **Stage 1 (Binary Anomaly Filter)**: High-recall detector (`HistGradientBoostingClassifier`, balanced class weights, tuned threshold $\tau = 0.35$) filtering nominal vs. anomalous operations with $>95\%$ recall.
    - **Stage 2 (Specialized Fault Classifiers)**: Multi-class category (8 fault types) and severity (5 fault grades) models trained exclusively on anomalous events, removing the 98.3% normal class dilution that previously degraded multi-class classifiers.
 4. **Residual Stacking Ensemble Architecture**:
-   - Combines 5 base classifiers: HistGradientBoosting, Random Forest, Extra Trees, Calibrated Linear SGD, and K-Nearest Neighbors.
-   - **Residual Stacking Innovation**: Concatentates consensus Soft-Voting probability vectors alongside base model probabilities into an $L_2$-regularized Logistic Regression meta-learner. This guarantees that the meta-learner will never degrade below soft voting, resolving previous meta-learner underfitting on extreme class imbalances.
+   - Combines 5 base classifiers: HistGradientBoosting, Random Forest, Extra Trees, Linear SGD Classifier (Log Loss), and K-Nearest Neighbors.
+   - **Residual Stacking Design**: Concatenates consensus Soft-Voting probability vectors alongside base model probabilities into an $L_2$-regularized Logistic Regression meta-learner. By including the consensus probability baseline directly in the meta-feature space, this provides strong inductive regularization to guard against meta-learner underfitting on extreme class imbalances.
 5. **Boundary-Safe Dynamic & Rolling Feature Engineering**:
    - Static AC metrics: Apparent Power ($S = |V| \cdot |I|$), Reactive Power ($Q = \sqrt{S^2 - P^2}$), Power Distortion Ratio.
-   - Boundary-safe temporal derivatives ($\frac{dV}{dt}, \frac{dI}{dt}, \frac{dP}{dt}$) strictly partitioned by `["station_id", "segment_id", "event_id"]`.
+   - Boundary-safe temporal derivatives ($\frac{dV}{dt}, \frac{dI}{dt}, \frac{dP}{dt}$) strictly partitioned by collision-free group IDs to eliminate cross-event and normal-chunk boundary leakage.
    - 5-second dynamic rolling standard deviations (`rolling_std_v5`, `rolling_std_i5`, `rolling_std_p5`) and station-invariant normalized power ratio ($P / \bar{P}_{30s}$).
    - Stateful single-sample circular buffer supporting streaming online inference without synthetic padding.
 6. **Physics-Guided Attribution & Explainability**:
    - Fast heuristic physical diagnostic engine attributing anomalous predictions to dynamic deviations in electrical parameters (e.g. voltage sag severity, inrush current spikes, phase distortion).
-7. **Production Interactive Web Dashboard & Live Stream Simulator**:
-   - Built with zero external web dependencies, serving live at `http://localhost:8501`.
-   - **Tab 1: Two-Stage Hierarchical Diagnosis**: Multi-stage classification breakdown with physical diagnostic cards.
-   - **Tab 2: Interactive 1 Hz Live Grid Stream Simulator**: Real-time circular buffer and live HTML5 canvas waveform animation with interactive fault injection (Voltage Sag, Inverter Overload, System Outage).
-   - **Tab 3: Solar PV Telemetry Adapter**: Real-time AC/DC string parameter transformation ($S = V \cdot I, Q = \sqrt{S^2 - P^2}$).
-   - **Tab 4: Benchmark Model Explorer**: Embedded evaluation metrics and confusion matrices.
+7. **Production FastAPI Service & Interactive Web Dashboard**:
+   - **FastAPI Prediction Backend** (`app/api.py`): Serves real two-stage ML inference, thresholding, and live 1 Hz stream generation via RESTful endpoints.
+   - **Interactive Web Dashboard** (`app/dashboard_server.py`): Zero-dependency dashboard connected live to the FastAPI backend.
+     - **Tab 1: Two-Stage Hierarchical Diagnosis**: Multi-stage classification breakdown with physical diagnostic cards.
+     - **Tab 2: Interactive 1 Hz Live Grid Stream Simulator**: Real-time 1,000 ms telemetry feed and live HTML5 canvas waveform animation with fault injection (Voltage Sag, Inverter Overload, System Outage).
+     - **Tab 3: Solar PV Telemetry Adapter**: Real-time AC/DC string parameter transformation ($S = V \cdot I, Q = \sqrt{S^2 - P^2}$).
+     - **Tab 4: Benchmark Model Explorer**: Embedded evaluation metrics and confusion matrices.
 
 ---
 

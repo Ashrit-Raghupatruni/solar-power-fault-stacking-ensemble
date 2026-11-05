@@ -58,10 +58,41 @@ def train_stage1_binary_detector():
     binary_detector.fit(X_train, y_train)
     fit_time = time.time() - start_t
     
-    # Evaluate Stage 1 on test partition
+    # Threshold Search on an internal validation split of the training set
+    print("\n--- Running Stage 1 Validation-Driven Threshold Search ---")
+    sgkf_val = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    train_sub_idx, val_sub_idx = next(sgkf_val.split(X_train, y_train, train_df["group_id"].values))
+    
+    val_model = HistGradientBoostingClassifier(
+        max_iter=150, max_depth=10, min_samples_leaf=30,
+        class_weight="balanced", random_state=RANDOM_STATE
+    )
+    val_model.fit(X_train[train_sub_idx], y_train[train_sub_idx])
+    val_probs = val_model.predict_proba(X_train[val_sub_idx])[:, 1]
+    
+    candidate_thresholds = np.linspace(0.15, 0.70, 12)
+    best_threshold = 0.35
+    best_f1 = 0.0
+    
+    print(f"  {'Threshold':<10} | {'Recall':<8} | {'Precision':<10} | {'F1-Score':<10} | {'FNR':<8}")
+    print("  " + "-"*55)
+    for th in candidate_thresholds:
+        v_preds = (val_probs >= th).astype(int)
+        v_rec = recall_score(y_train[val_sub_idx], v_preds, zero_division=0)
+        v_prec = precision_score(y_train[val_sub_idx], v_preds, zero_division=0)
+        v_f1 = f1_score(y_train[val_sub_idx], v_preds, zero_division=0)
+        v_fnr = 1.0 - v_rec
+        print(f"  {th:<10.2f} | {v_rec*100:<7.2f}% | {v_prec*100:<9.2f}% | {v_f1*100:<9.2f}% | {v_fnr*100:<7.2f}%")
+        # Optimization policy: Require >= 95% Recall, then maximize F1
+        if v_rec >= 0.95 and v_f1 > best_f1:
+            best_f1 = v_f1
+            best_threshold = float(th)
+
+    print(f"\nOptimal Stage 1 Validation Threshold Selected: {best_threshold:.2f} (Recall >= 95%, F1={best_f1*100:.2f}%)")
+
+    # Evaluate Stage 1 on untouched held-out test partition
     test_probs = binary_detector.predict_proba(X_test)[:, 1]
-    # Set threshold slightly lower to bias heavily toward zero false negatives
-    threshold = 0.35
+    threshold = best_threshold
     test_preds = (test_probs >= threshold).astype(int)
     
     rec = recall_score(y_test, test_preds)
@@ -108,9 +139,14 @@ def train_stage2_multiclass_pipeline(target_type: str = "category"):
         n_classes = len(STAGE2_CAT_TO_IDX)
         model_subfolder = "stage2_fault_category"
     else:
-        # Standardize severity
-        train_anom["target_idx"] = train_anom["severity"].map(STAGE2_SEV_TO_IDX).fillna(0).astype(int).values
-        test_anom["target_idx"] = test_anom["severity"].map(STAGE2_SEV_TO_IDX).fillna(0).astype(int).values
+        # Standardize severity with explicit validation
+        unmapped_train = train_anom["severity"][~train_anom["severity"].isin(STAGE2_SEV_TO_IDX.keys())].unique()
+        unmapped_test = test_anom["severity"][~test_anom["severity"].isin(STAGE2_SEV_TO_IDX.keys())].unique()
+        if len(unmapped_train) > 0 or len(unmapped_test) > 0:
+            raise ValueError(f"Unknown severity labels detected! Train: {unmapped_train}, Test: {unmapped_test}. Expected one of: {list(STAGE2_SEV_TO_IDX.keys())}")
+            
+        train_anom["target_idx"] = train_anom["severity"].map(STAGE2_SEV_TO_IDX).astype(int).values
+        test_anom["target_idx"] = test_anom["severity"].map(STAGE2_SEV_TO_IDX).astype(int).values
         n_classes = len(STAGE2_SEV_TO_IDX)
         model_subfolder = "stage2_fault_severity"
         

@@ -107,21 +107,32 @@ def train_and_stack_full_scale(target_col: str, model_subfolder: str):
         timing_records[m_info["name"]] = {"fit_time_s": round(fit_time, 2)}
         print(f"  {m_info['name']:25s} | Fit: {fit_time:6.2f}s -> Saved as {m_info['filename']}")
 
-    # 3. Train Stacking Meta-Learner
-    print("\n--- Step 3: Meta-Learner Tuning & Selection ---")
+    # 3. Train Stacking Meta-Learner (Selected on Internal OOF Validation, NEVER on Test)
+    print("\n--- Step 3: Meta-Learner Tuning & Selection (Using Internal OOF Validation) ---")
     from sklearn.metrics import f1_score
-    best_meta = None
-    best_f1 = -1.0
+    
+    # Create internal validation split of the OOF meta-features
+    meta_val_splitter = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    meta_tr_idx, meta_val_idx = next(meta_val_splitter.split(oof_meta_features, y_train, groups_train))
+    
+    best_meta_factory = None
+    best_val_f1 = -1.0
     
     for meta_key, meta_info in META_LEARNER_REGISTRY.items():
-        meta_learner = meta_info["factory"](RANDOM_STATE)
-        meta_learner.fit(oof_meta_features, y_train)
-        preds = meta_learner.predict(test_meta_features)
-        score = f1_score(y_test, preds, average="macro", zero_division=0)
-        print(f"  {meta_info['name']:45s} | Macro-F1: {score*100:.2f}%")
-        if score > best_f1:
-            best_f1 = score
-            best_meta = meta_learner
+        # Evaluate candidate meta-learner on inner validation split
+        candidate_model = meta_info["factory"](RANDOM_STATE)
+        candidate_model.fit(oof_meta_features[meta_tr_idx], y_train[meta_tr_idx])
+        val_preds = candidate_model.predict(oof_meta_features[meta_val_idx])
+        val_score = f1_score(y_train[meta_val_idx], val_preds, average="macro", zero_division=0)
+        print(f"  {meta_info['name']:45s} | Inner Val Macro-F1: {val_score*100:.2f}%")
+        if val_score > best_val_f1:
+            best_val_f1 = val_score
+            best_meta_factory = meta_info["factory"]
+            
+    # Retrain winning meta-learner on complete 100% OOF features
+    print(f"\nWinning Meta-Learner Retrained on Full OOF Dataset (Val Macro-F1: {best_val_f1*100:.2f}%)")
+    best_meta = best_meta_factory(RANDOM_STATE)
+    best_meta.fit(oof_meta_features, y_train)
             
     joblib.dump(best_meta, save_dir / "stacking_meta_learner.pkl")
     joblib.dump(timing_records, save_dir / "timing_benchmark.pkl")

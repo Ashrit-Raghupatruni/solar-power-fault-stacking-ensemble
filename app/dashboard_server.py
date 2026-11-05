@@ -342,7 +342,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
             }});
         }}
 
-        function diagnoseTwoStage() {{
+        async function diagnoseTwoStage() {{
             const v = parseFloat(document.getElementById('v_in').value);
             const i = parseFloat(document.getElementById('i_in').value);
             const p = parseFloat(document.getElementById('p_in').value);
@@ -356,43 +356,75 @@ HTML_PAGE = f"""<!DOCTYPE html>
             let badgeClass = "badge-normal";
             let triggers = [];
 
-            if (v < 198.0) {{
-                isAnom = true;
-                cat = "Voltage Sag / Dip";
-                sev = "High";
-                badgeClass = "badge-danger";
-                triggers.push(`Line Voltage dropped to ${{v}} V (< 198V statutory threshold).`);
-                if (dv > 10.0) triggers.push(`High transient derivative dV/dt = ${{dv}} V/s.`);
-            }} else if (v > 242.0) {{
-                isAnom = true;
-                cat = "Voltage Swell / Overvoltage";
-                sev = "Medium";
-                badgeClass = "badge-warning";
-                triggers.push(`Line Voltage rose to ${{v}} V (> 242V nominal ceiling).`);
-            }} else if (pf < 0.80) {{
-                isAnom = true;
-                cat = "Power Quality (Low PF)";
-                sev = "Medium";
-                badgeClass = "badge-warning";
-                triggers.push(`Elevated reactive power consumption (Power Factor: ${{pf}}).`);
-            }} else if (Math.abs(f - 50.0) >= 0.8) {{
-                isAnom = true;
-                cat = "Frequency Excursion";
-                sev = "High";
-                badgeClass = "badge-danger";
-                triggers.push(`AC frequency deviated to ${{f}} Hz (50.0 ± 0.5 Hz nominal).`);
-            }} else if (v < 20.0 && p === 0.0) {{
-                isAnom = true;
-                cat = "Supply Outage";
-                sev = "Critical";
-                badgeClass = "badge-danger";
-                triggers.push("Total line de-energization and null active power detected.");
-            }} else if (i > 30.0) {{
-                isAnom = true;
-                cat = "Current Overload";
-                sev = "High";
-                badgeClass = "badge-danger";
-                triggers.push(`Branch current draw reached ${{i}} A exceeding rating.`);
+            try {{
+                const payload = {{
+                    voltage_V: v,
+                    current_A: i,
+                    power_W: p,
+                    frequency_Hz: f,
+                    power_factor: pf,
+                    thd_V: 1.2,
+                    thd_I: 2.1,
+                    phase_angle_deg: 18.0,
+                    unbalance_V: 0.5
+                }};
+
+                const response = await fetch("http://localhost:8000/predict/two-stage", {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify(payload)
+                }});
+
+                if (response.ok) {{
+                    const data = await response.json();
+                    isAnom = data.is_anomaly;
+                    cat = data.fault_category;
+                    sev = data.fault_severity;
+                    badgeClass = isAnom ? (sev.toLowerCase() === "critical" ? "badge-danger" : "badge-warning") : "badge-normal";
+                    triggers = data.shap_triggers || [];
+                }} else {{
+                    throw new Error("HTTP error " + response.status);
+                }}
+            }} catch (err) {{
+                // Fallback: evaluate outage condition strictly before voltage sag
+                if (v < 20.0 && p === 0.0) {{
+                    isAnom = true;
+                    cat = "Supply Outage";
+                    sev = "Critical";
+                    badgeClass = "badge-danger";
+                    triggers.push("Total line de-energization and null active power detected.");
+                }} else if (v < 198.0) {{
+                    isAnom = true;
+                    cat = "Voltage Sag / Dip";
+                    sev = "High";
+                    badgeClass = "badge-danger";
+                    triggers.push(`Line Voltage dropped to ${{v}} V (< 198V statutory threshold).`);
+                    if (dv > 10.0) triggers.push(`High transient derivative dV/dt = ${{dv}} V/s.`);
+                }} else if (v > 242.0) {{
+                    isAnom = true;
+                    cat = "Voltage Swell / Overvoltage";
+                    sev = "Medium";
+                    badgeClass = "badge-warning";
+                    triggers.push(`Line Voltage rose to ${{v}} V (> 242V nominal ceiling).`);
+                }} else if (pf < 0.80) {{
+                    isAnom = true;
+                    cat = "Power Quality (Low PF)";
+                    sev = "Medium";
+                    badgeClass = "badge-warning";
+                    triggers.push(`Elevated reactive power consumption (Power Factor: ${{pf}}).`);
+                }} else if (Math.abs(f - 50.0) >= 0.8) {{
+                    isAnom = true;
+                    cat = "Frequency Excursion";
+                    sev = "High";
+                    badgeClass = "badge-danger";
+                    triggers.push(`AC frequency deviated to ${{f}} Hz (50.0 ± 0.5 Hz nominal).`);
+                }} else if (i > 30.0) {{
+                    isAnom = true;
+                    cat = "Current Overload";
+                    sev = "High";
+                    badgeClass = "badge-danger";
+                    triggers.push(`Branch current draw reached ${{i}} A exceeding rating.`);
+                }}
             }}
 
             // Stage 1 output
@@ -475,7 +507,8 @@ HTML_PAGE = f"""<!DOCTYPE html>
 
         function startStream() {{
             if (!streamInterval) {{
-                streamInterval = setInterval(updateStream, 200);
+                // 1000 ms strictly simulates true 1 Hz IoT sampling rate
+                streamInterval = setInterval(updateStream, 1000);
                 document.getElementById('stream-status').innerText = "Status: Streaming Live 1 Hz Grid Feed";
             }}
         }}

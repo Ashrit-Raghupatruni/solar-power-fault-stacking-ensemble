@@ -70,16 +70,19 @@ def load_and_split_leak_free(normal_block_length_s: int = 1200):
         # 1. Group IDs for Anomalies (per event and station)
         anom_mask = df_st["anomaly"] == 1
         df_st["group_id"] = np.int64(0)
-        df_st.loc[anom_mask, "group_id"] = np.int64(st_id) * 100000 + df_st.loc[anom_mask, "event_id"].astype("int64")
+        df_st.loc[anom_mask, "group_id"] = (
+            np.int64(st_id) * np.int64(10_000_000) + df_st.loc[anom_mask, "event_id"].astype("int64")
+        )
         
         # 2. Group IDs for Normal Contiguous Time Blocks (20-minute chunks)
+        # Collision-free: station_id * 10^9 + segment_id * 10^5 + time_block (no modulo wrapping)
         norm_mask = df_st["anomaly"] == 0
         time_block = (df_st.loc[norm_mask, "sample_id"].astype("int64") // normal_block_length_s)
         seg_id_int64 = df_st.loc[norm_mask, "segment_id"].astype("int64")
         df_st.loc[norm_mask, "group_id"] = (
-            np.int64(st_id) * 100000 + 50000 + 
-            (seg_id_int64 * 1000) + 
-            (time_block % 500)
+            np.int64(st_id) * np.int64(1_000_000_000) + 
+            (seg_id_int64 * np.int64(100_000)) + 
+            time_block
         )
         
         # Boundary-safe dynamic feature generation

@@ -147,38 +147,44 @@ def train_and_stack_pipeline(target_col: str, model_subfolder: str):
         joblib.dump(model, save_dir / f"{clean_name}.pkl")
         print(f"  {name:25s} | Fit: {fit_time:6.2f}s -> Saved")
 
-    # 3. Meta-Learner Tuning & Selection
-    print("\n--- Step 3: Comparing & Tuning Class-Balanced Meta-Learners ---")
+    # 3. Meta-Learner Tuning & Selection (Using Inner OOF Validation, Zero Test Leakage)
+    print("\n--- Step 3: Comparing & Tuning Class-Balanced Meta-Learners (Inner Validation) ---")
+    meta_val_splitter = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    meta_tr_idx, meta_val_idx = next(meta_val_splitter.split(oof_meta_features, y_train, groups_train))
+    
     meta_candidates = {
-        "Logistic Regression (L2, Balanced, C=0.1)": LogisticRegression(
+        "Logistic Regression (L2, Balanced, C=0.1)": lambda: LogisticRegression(
             C=0.1, penalty="l2", class_weight="balanced", max_iter=2000, random_state=RANDOM_STATE
         ),
-        "Logistic Regression (L2, Balanced, C=1.0)": LogisticRegression(
+        "Logistic Regression (L2, Balanced, C=1.0)": lambda: LogisticRegression(
             C=1.0, penalty="l2", class_weight="balanced", max_iter=2000, random_state=RANDOM_STATE
         ),
-        "Ridge Classifier (Balanced, alpha=1.0)": RidgeClassifier(
+        "Ridge Classifier (Balanced, alpha=1.0)": lambda: RidgeClassifier(
             alpha=1.0, class_weight="balanced", random_state=RANDOM_STATE
         )
     }
     
     best_meta_name = None
     best_meta_score = -1.0
-    best_meta_model = None
+    best_meta_factory = None
     
     from sklearn.metrics import f1_score
     
-    for m_name, meta_model in meta_candidates.items():
-        meta_model.fit(oof_meta_features, y_train)
-        val_preds = meta_model.predict(test_meta_features)
-        val_f1 = f1_score(y_test, val_preds, average="macro", zero_division=0)
-        print(f"  Meta-Learner: {m_name:42s} | Test Macro-F1: {val_f1*100:.2f}%")
+    for m_name, meta_factory in meta_candidates.items():
+        candidate_meta = meta_factory()
+        candidate_meta.fit(oof_meta_features[meta_tr_idx], y_train[meta_tr_idx])
+        val_preds = candidate_meta.predict(oof_meta_features[meta_val_idx])
+        val_f1 = f1_score(y_train[meta_val_idx], val_preds, average="macro", zero_division=0)
+        print(f"  Meta-Learner: {m_name:42s} | Inner Val Macro-F1: {val_f1*100:.2f}%")
         
         if val_f1 > best_meta_score:
             best_meta_score = val_f1
             best_meta_name = m_name
-            best_meta_model = meta_model
+            best_meta_factory = meta_factory
 
-    print(f"\nWinner Meta-Learner: {best_meta_name} (Macro-F1: {best_meta_score*100:.2f}%)")
+    print(f"\nWinning Meta-Learner: {best_meta_name} (Inner Val Macro-F1: {best_meta_score*100:.2f}%)")
+    best_meta_model = best_meta_factory()
+    best_meta_model.fit(oof_meta_features, y_train)
     joblib.dump(best_meta_model, save_dir / "stacking_meta_learner.pkl")
     timing_records["Stacking Classifier"] = {"fit_time_s": 2.5, "meta_model": best_meta_name}
     joblib.dump(timing_records, save_dir / "timing_benchmark.pkl")

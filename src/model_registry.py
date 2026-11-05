@@ -44,7 +44,7 @@ MODEL_REGISTRY = {
         )
     },
     "calibrated_linear_sgd": {
-        "name": "Calibrated Linear SGD",
+        "name": "Linear SGD Classifier (Log Loss)",
         "filename": "calibrated_linear_sgd.pkl",
         "needs_scaling": True,
         "factory": lambda random_state: SGDClassifier(
