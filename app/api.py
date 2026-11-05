@@ -75,15 +75,15 @@ def get_pipeline():
     return pipeline_cache
 
 class TelemetryPayload(BaseModel):
-    voltage_V: float
-    current_A: float
-    frequency_Hz: float
-    power_W: float
-    power_factor: float
-    thd_V: float
-    thd_I: float
-    phase_angle_deg: float
-    unbalance_V: float
+    voltage_V: float = 220.0
+    current_A: float = 5.0
+    frequency_Hz: float = 50.0
+    power_W: float = 1100.0
+    power_factor: float = 0.98
+    thd_V: Optional[float] = 1.2
+    thd_I: Optional[float] = 2.1
+    phase_angle_deg: Optional[float] = 18.0
+    unbalance_V: Optional[float] = 0.5
     wifi_rssi_dBm: Optional[float] = -65.0
     station_id: Optional[int] = 1
 
@@ -105,6 +105,32 @@ def health():
         "num_cat_models": len(pipe.get("cat_models", {})),
         "num_sev_models": len(pipe.get("sev_models", {})),
         "threshold": pipe.get("threshold", 0.35)
+    }
+
+@app.get("/")
+def root():
+    return {
+        "message": "Solar & Grid Fault Detection API is running",
+        "docs_url": "/docs",
+        "health_url": "/health",
+        "endpoints": ["/predict/two-stage", "/stream/step", "/stream/inject"]
+    }
+
+@app.get("/predict/two-stage")
+def predict_two_stage_get_info():
+    return {
+        "message": "Endpoint expects HTTP POST with JSON body",
+        "example_payload": {
+            "voltage_V": 220.0,
+            "current_A": 5.0,
+            "frequency_Hz": 50.0,
+            "power_W": 1100.0,
+            "power_factor": 0.98,
+            "thd_V": 1.2,
+            "thd_I": 2.1,
+            "phase_angle_deg": 18.0,
+            "unbalance_V": 0.5
+        }
     }
 
 @app.post("/predict/two-stage")
