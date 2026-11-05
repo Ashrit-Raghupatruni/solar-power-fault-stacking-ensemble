@@ -15,6 +15,9 @@ METRICS_DIR = REPORTS_DIR / "metrics"
 
 for p in [
     PROCESSED_DATA_DIR,
+    MODELS_DIR / "stage1_binary",
+    MODELS_DIR / "stage2_fault_category",
+    MODELS_DIR / "stage2_fault_severity",
     MODELS_DIR / "fault_category",
     MODELS_DIR / "fault_severity",
     MODELS_DIR / "preprocessors",
@@ -51,7 +54,7 @@ EDGE_FEATURES = [
     "SII"
 ]
 
-# 3. Upgraded Domain Electrical & Dynamic Temporal Features
+# 3. Upgraded Domain Electrical, Dynamic & Rolling Volatility Features
 ENGINEERED_FEATURES = [
     "apparent_power_VA",
     "reactive_power_var",
@@ -64,7 +67,12 @@ ENGINEERED_FEATURES = [
     "d_current_dt",
     "d_power_dt",
     "power_factor_stability",
-    "impedance_proxy_ohm"
+    "impedance_proxy_ohm",
+    # Rolling volatility & station-invariant baseline ratio
+    "rolling_std_v5",
+    "rolling_std_i5",
+    "rolling_std_p5",
+    "power_to_baseline_ratio"
 ]
 
 FEATURE_COLS = RAW_SENSOR_FEATURES + EDGE_FEATURES + ENGINEERED_FEATURES
@@ -74,20 +82,40 @@ TARGET_CATEGORY = "fault_category"
 TARGET_SEVERITY = "severity"
 TARGET_BINARY = "anomaly"
 
-# 9 Multiclass Fault Categories (8 Controlled Anomalies + Normal)
-CATEGORY_LABELS = [
-    "normal",
+# 8 Controlled Anomalies Exclusively for Stage 2 Multi-Class Identification
+STAGE2_FAULT_CATEGORIES = [
     "voltage",
     "load",
-    "power_quality",
-    "sensor",
-    "outage",
     "frequency",
+    "power_quality",
+    "outage",
+    "sensor",
     "context",
     "compound"
 ]
 
-# 6 Severity grades (5 Non-zero Severity Grades + None)
+STAGE2_FAULT_SEVERITIES = [
+    "incipient",
+    "low",
+    "medium",
+    "high",
+    "critical"
+]
+
+# 9 Multiclass Fault Categories (Including Normal for flat pipelines)
+CATEGORY_LABELS = [
+    "normal",
+    "voltage",
+    "load",
+    "frequency",
+    "power_quality",
+    "outage",
+    "sensor",
+    "context",
+    "compound"
+]
+
+# 6 Severity grades (Including None for flat pipelines)
 SEVERITY_LABELS = [
     "none",
     "incipient",
@@ -113,5 +141,11 @@ IDX_TO_CATEGORY = {idx: cat for cat, idx in CATEGORY_TO_IDX.items()}
 
 SEVERITY_TO_IDX = {sev: idx for idx, sev in enumerate(SEVERITY_LABELS)}
 IDX_TO_SEVERITY = {idx: sev for sev, idx in SEVERITY_TO_IDX.items()}
+
+STAGE2_CAT_TO_IDX = {cat: idx for idx, cat in enumerate(STAGE2_FAULT_CATEGORIES)}
+STAGE2_IDX_TO_CAT = {idx: cat for cat, idx in STAGE2_CAT_TO_IDX.items()}
+
+STAGE2_SEV_TO_IDX = {sev: idx for idx, sev in enumerate(STAGE2_FAULT_SEVERITIES)}
+STAGE2_IDX_TO_SEV = {idx: sev for sev, idx in STAGE2_SEV_TO_IDX.items()}
 
 RANDOM_STATE = 42
