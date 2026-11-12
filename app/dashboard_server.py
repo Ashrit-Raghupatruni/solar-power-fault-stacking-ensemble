@@ -1,536 +1,952 @@
 """
-Advanced Modern Interactive Web Dashboard & Real-Time Grid Telemetry Simulator.
-Features:
-1. Two-Stage Cascaded Detection (Binary Filter -> Specialized Multiclass & Severity Identifier)
-2. Interactive Real-Time Time-Series Grid Simulator (Waveform stream player)
-3. Solar Photovoltaic (PV) Inverter Telemetry Adapter
-4. Domain-Informed SHAP Explainability Cards (Top 3 physical triggers)
-5. Benchmark Explorer (Comprehensive metrics, MCC, Cohen's Kappa, and Confusion Matrices)
+PowerGuard AI - Electrical Intelligence & Solar PV Monitoring Dashboard Server.
+Pure zero-dependency, ultra-responsive HTML5/CSS3/JavaScript industrial monitoring platform.
+Features 8 dedicated sections:
+  01. Overview - KPIs & fault distribution charts
+  02. Live Monitoring - Real-time 1 Hz telemetry waveforms with fault injection
+  03. Fault Diagnosis - Two-stage cascaded detection with probability gauges
+  04. Stacking Ensemble - Architecture visualizer & meta-learner comparison
+  05. Solar PV Monitoring - AhoyDTU / OpenDTU multi-string & efficiency monitoring
+  06. Model Evaluation - Normalized confusion matrices & classification metrics
+  07. Dataset Analytics - 1.81M multi-station distribution and class imbalance
+  08. System & API - FastAPI health, loaded models & operational schema
 """
 import http.server
 import socketserver
+import os
 import json
-import csv
-import base64
 from pathlib import Path
 
 PORT = 8501
 BASE_DIR = Path(__file__).resolve().parent.parent
-METRICS_CAT_FILE = BASE_DIR / "reports" / "metrics" / "fault_category_comparison.csv"
-METRICS_SEV_FILE = BASE_DIR / "reports" / "metrics" / "fault_severity_comparison.csv"
-FIG_CAT_CM = BASE_DIR / "reports" / "figures" / "fault_category_stacking_confusion_matrix.png"
-FIG_CAT_COMP = BASE_DIR / "reports" / "figures" / "fault_category_model_comparison.png"
 
-def load_metrics_table(filepath):
-    if not filepath.exists():
-        return "<tr><td colspan='5'>No metrics recorded yet.</td></tr>"
-    rows_html = ""
-    with open(filepath, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            acc = float(r.get("Accuracy", r.get("Raw Accuracy", 0.0))) * 100
-            f1 = float(r.get("F1-Score (Macro)", r.get("Macro-F1", 0.0))) * 100
-            prec = float(r.get("Precision (Macro)", r.get("Macro-Precision", 0.0))) * 100
-            rec = float(r.get("Recall (Macro)", r.get("Macro-Recall", 0.0))) * 100
-            is_ensemble = "Stacking" in r["Model"] or "Voting" in r["Model"]
-            style = ' style="font-weight: 700; color: #38bdf8;"' if is_ensemble else ''
-            badge = " ⚡" if is_ensemble else ""
-            rows_html += f"""
-            <tr{style}>
-                <td>{r['Model']}{badge}</td>
-                <td>{acc:.2f}%</td>
-                <td>{f1:.2f}%</td>
-                <td>{prec:.2f}%</td>
-                <td>{rec:.2f}%</td>
-            </tr>
-            """
-    return rows_html
-
-def get_base64_image(image_path):
-    if image_path.exists():
-        with open(image_path, "rb") as f:
-            return "data:image/png;base64," + base64.b64encode(f.read()).decode("utf-8")
-    return ""
-
-cat_table_html = load_metrics_table(METRICS_CAT_FILE)
-sev_table_html = load_metrics_table(METRICS_SEV_FILE)
-img_cm_base64 = get_base64_image(FIG_CAT_CM)
-img_comp_base64 = get_base64_image(FIG_CAT_COMP)
-
-HTML_PAGE = f"""<!DOCTYPE html>
+HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>⚡ Advanced Solar & Grid Fault Detection System</title>
+    <title>PowerGuard AI — Electrical Intelligence & Solar PV Platform</title>
     <style>
-        :root {{
-            --bg: #090d16;
-            --surface: #131b2e;
-            --surface-card: #1c2640;
+        :root {
+            --bg-base: #0a0e17;
+            --bg-card: #111827;
+            --bg-card-hover: #172133;
+            --border: #1f293d;
+            --border-highlight: #38bdf8;
             --primary: #38bdf8;
-            --primary-glow: rgba(56, 189, 248, 0.25);
+            --primary-glow: rgba(56, 189, 248, 0.2);
             --accent: #f59e0b;
             --danger: #ef4444;
             --success: #10b981;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --border: #2a3859;
-        }}
-        * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
-        body {{ background-color: var(--bg); color: var(--text-main); padding: 25px; line-height: 1.5; }}
-        .container {{ max-width: 1280px; margin: 0 auto; }}
-        header {{ margin-bottom: 25px; border-bottom: 1px solid var(--border); padding-bottom: 18px; display: flex; justify-content: space-between; align-items: center; }}
-        h1 {{ font-size: 26px; color: var(--primary); display: flex; align-items: center; gap: 10px; font-weight: 700; }}
-        .header-badge {{ background: #1e293b; border: 1px solid var(--border); padding: 6px 14px; border-radius: 999px; font-size: 13px; color: #38bdf8; font-weight: 600; }}
-        
-        .tabs {{ display: flex; gap: 8px; margin-bottom: 25px; border-bottom: 1px solid var(--border); }}
-        .tab-btn {{ background: none; border: none; padding: 12px 22px; color: var(--text-muted); font-size: 14px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; }}
-        .tab-btn:hover {{ color: var(--text-main); }}
-        .tab-btn.active {{ color: var(--primary); border-bottom-color: var(--primary); }}
-        
-        .tab-content {{ display: none; }}
-        .tab-content.active {{ display: block; }}
-        
-        .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.25); }}
-        .grid-3 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 18px; }}
-        .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
-        
-        .form-group {{ margin-bottom: 15px; }}
-        label {{ display: block; font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }}
-        input[type="number"] {{ width: 100%; padding: 12px 14px; background: #0b1120; border: 1px solid var(--border); border-radius: 8px; color: var(--text-main); font-size: 15px; outline: none; transition: border 0.2s; }}
-        input[type="number"]:focus {{ border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }}
-        
-        button.btn-primary {{ background: linear-gradient(135deg, #0284c7, #0369a1); color: white; border: none; padding: 14px 28px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 10px; transition: transform 0.1s, opacity 0.2s; }}
-        button.btn-primary:hover {{ opacity: 0.95; transform: translateY(-1px); }}
-        button.btn-secondary {{ background: #1e293b; color: var(--text-main); border: 1px solid var(--border); padding: 12px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; margin-right: 10px; }}
-        button.btn-secondary:hover {{ background: #2a3859; }}
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --sidebar-width: 260px;
+        }
 
-        .result-panel {{ display: none; margin-top: 25px; padding: 22px; background: #0b1120; border-radius: 10px; border-left: 5px solid var(--primary); }}
-        .result-title {{ font-size: 12px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px; }}
-        .result-val {{ font-size: 24px; font-weight: 700; margin: 8px 0; }}
-        .badge {{ display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; text-transform: uppercase; }}
-        .badge-normal {{ background: #064e3b; color: #6ee7b7; }}
-        .badge-warning {{ background: #78350f; color: #fde68a; }}
-        .badge-danger {{ background: #7f1d1d; color: #fca5a5; }}
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: var(--bg-base); color: var(--text-main); display: flex; min-height: 100vh; overflow-x: hidden; }
 
-        .shap-box {{ margin-top: 15px; padding: 15px; background: #17223b; border-radius: 8px; border: 1px solid var(--border); }}
-        .shap-title {{ font-size: 13px; font-weight: 600; color: #38bdf8; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }}
-        .shap-item {{ font-size: 13px; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }}
+        /* Left Navigation Sidebar */
+        aside {
+            width: var(--sidebar-width);
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+            z-index: 100;
+        }
 
-        table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
-        th, td {{ text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }}
-        th {{ color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }}
-        tr:hover {{ background: #1a2540; }}
+        .brand-box {
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
 
-        .stream-canvas {{ width: 100%; height: 160px; background: #070a12; border: 1px solid var(--border); border-radius: 8px; margin-top: 15px; }}
-        .img-container {{ text-align: center; margin-top: 20px; }}
-        .img-container img {{ max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); }}
+        .brand-icon {
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #38bdf8, #2563eb);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        .brand-title { font-size: 16px; font-weight: 700; letter-spacing: 0.5px; }
+        .brand-sub { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+
+        .nav-list { list-style: none; padding: 15px 10px; flex: 1; overflow-y: auto; }
+        .nav-item {
+            padding: 12px 14px;
+            margin-bottom: 4px;
+            border-radius: 8px;
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .nav-item:hover { color: var(--text-main); background: rgba(56, 189, 248, 0.05); }
+        .nav-item.active {
+            color: var(--primary);
+            background: rgba(56, 189, 248, 0.12);
+            border-left: 3px solid var(--primary);
+            font-weight: 600;
+        }
+
+        .nav-num { font-size: 11px; opacity: 0.6; font-family: monospace; }
+
+        /* Backend Status Pill */
+        .status-box {
+            padding: 16px;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+        }
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            font-weight: 600;
+        }
+        .status-pill.offline {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.2);
+        }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+        /* Main Container */
+        main {
+            margin-left: var(--sidebar-width);
+            flex: 1;
+            padding: 30px;
+            max-width: 1400px;
+        }
+
+        /* Top Bar */
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab-title { font-size: 22px; font-weight: 700; color: #fff; }
+        .tab-subtitle { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+        /* Offline Disconnect Banner */
+        .alert-banner {
+            display: none;
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid var(--danger);
+            color: #fca5a5;
+            padding: 12px 18px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* Grid Cards */
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 24px; }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-title { font-size: 14px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .card-val { font-size: 28px; font-weight: 700; color: #fff; }
+        .card-sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+        /* Form Inputs */
+        .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+        .form-group input {
+            background: #090d16;
+            border: 1px solid var(--border);
+            padding: 10px 14px;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            font-family: monospace;
+            outline: none;
+            transition: border 0.2s;
+        }
+        .form-group input:focus { border-color: var(--primary); }
+
+        button.btn-primary {
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+            color: #fff;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        button.btn-primary:hover { opacity: 0.95; }
+        button.btn-secondary {
+            background: #1f2937;
+            color: #e5e7eb;
+            border: 1px solid #374151;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
+            margin-right: 8px;
+        }
+        button.btn-secondary:hover { background: #374151; }
+
+        /* Tab Sections */
+        .tab-section { display: none; }
+        .tab-section.active { display: block; animation: fadeIn 0.25s ease-out; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Diagnosis Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .badge-normal { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid #059669; }
+        .badge-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid #d97706; }
+        .badge-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid #dc2626; }
+
+        /* Waveform Canvas */
+        canvas.stream-canvas {
+            width: 100%;
+            height: 140px;
+            background: #090d16;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: block;
+        }
+
+        /* SVG Architecture Box */
+        .arch-container {
+            background: #090d16;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+        }
+
+        /* Confusion Matrix Image Container */
+        .img-container {
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            background: #090d16;
+            text-align: center;
+            padding: 10px;
+        }
+        .img-container img { max-width: 100%; height: auto; border-radius: 4px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
+
+    <!-- Sidebar Navigation -->
+    <aside>
+        <div class="brand-box">
+            <div class="brand-icon">⚡</div>
             <div>
-                <h1>⚡ Advanced Solar & Grid Fault Detection System</h1>
-                <p style="color: var(--text-muted); font-size: 14px; margin-top: 4px;">Two-Stage Hierarchical Stacking Ensemble (Zero-Leakage Benchmark Architecture)</p>
-            </div>
-            <div class="header-badge">Branch: advance</div>
-        </header>
-
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab(0)">🔍 Two-Stage Real-Time Diagnosis</button>
-            <button class="tab-btn" onclick="switchTab(1)">📡 Live Grid Stream Simulator</button>
-            <button class="tab-btn" onclick="switchTab(2)">☀️ Solar PV Inverter Adapter</button>
-            <button class="tab-btn" onclick="switchTab(3)">📊 Benchmark & Metrics Explorer</button>
-        </div>
-
-        <!-- TAB 1: Two-Stage Real-Time Diagnosis -->
-        <div class="tab-content active" id="tab-0">
-            <div class="card">
-                <h3 style="margin-bottom: 18px; color: var(--primary);">Real-Time Sensor Telemetry Input</h3>
-                <div class="grid-3">
-                    <div class="form-group">
-                        <label>AC Voltage (V)</label>
-                        <input type="number" id="v_in" value="220.0" step="0.5">
-                    </div>
-                    <div class="form-group">
-                        <label>AC Current (A)</label>
-                        <input type="number" id="i_in" value="5.2" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>Active Power (W)</label>
-                        <input type="number" id="p_in" value="1144.0" step="10">
-                    </div>
-                    <div class="form-group">
-                        <label>Frequency (Hz)</label>
-                        <input type="number" id="f_in" value="50.0" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>Power Factor (cos φ)</label>
-                        <input type="number" id="pf_in" value="0.98" min="-1" max="1" step="0.01">
-                    </div>
-                    <div class="form-group">
-                        <label>Dynamic dV/dt (V/s)</label>
-                        <input type="number" id="dv_in" value="0.0" step="0.5">
-                    </div>
-                </div>
-                <button class="btn-primary" onclick="diagnoseTwoStage()">⚡ Run Two-Stage Hierarchical Diagnosis</button>
-
-                <div class="result-panel" id="diagnosis-result">
-                    <div class="grid-3">
-                        <div>
-                            <div class="result-title">Stage 1: Binary Filter</div>
-                            <div class="result-val" id="res-stage1" style="color: var(--success);">Normal Baseline</div>
-                            <span class="badge badge-normal" id="badge-stage1">Pass</span>
-                        </div>
-                        <div>
-                            <div class="result-title">Stage 2: Fault Category</div>
-                            <div class="result-val" id="res-stage2-cat" style="color: var(--primary);">Normal Operation</div>
-                            <span class="badge badge-normal" id="badge-stage2-cat">Normal</span>
-                        </div>
-                        <div>
-                            <div class="result-title">Stage 2: Severity Grade</div>
-                            <div class="result-val" id="res-stage2-sev" style="color: var(--accent);">None</div>
-                            <span class="badge badge-normal" id="badge-stage2-sev">Nominal</span>
-                        </div>
-                    </div>
-
-                    <!-- SHAP Feature Attribution Box -->
-                    <div class="shap-box">
-                        <div class="shap-title">💡 Top Physical Decision Triggers (SHAP Feature Attribution):</div>
-                        <div id="shap-triggers">
-                            <div class="shap-item">✓ All electrical measurements conform to standard statutory bounds (220V ±10%, 50Hz ±1%).</div>
-                        </div>
-                    </div>
-                </div>
+                <div class="brand-title">PowerGuard AI</div>
+                <div class="brand-sub">Electrical & Solar</div>
             </div>
         </div>
 
-        <!-- TAB 2: Live Grid Stream Simulator -->
-        <div class="tab-content" id="tab-1">
-            <div class="card">
-                <h3 style="margin-bottom: 12px; color: var(--primary);">📡 Real-Time Grid Telemetry Stream Simulator</h3>
-                <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 15px;">
-                    Simulates live 1 Hz continuous telemetry streaming from IoT monitoring nodes. Plays back controlled fault events (Voltage Sag, Low PF, Overload, Outage) in real-time.
-                </p>
+        <ul class="nav-list">
+            <li class="nav-item active" onclick="switchNav(0)">
+                <span class="nav-num">01.</span> Overview
+            </li>
+            <li class="nav-item" onclick="switchNav(1)">
+                <span class="nav-num">02.</span> Live Monitoring
+            </li>
+            <li class="nav-item" onclick="switchNav(2)">
+                <span class="nav-num">03.</span> Fault Diagnosis
+            </li>
+            <li class="nav-item" onclick="switchNav(3)">
+                <span class="nav-num">04.</span> Stacking Ensemble
+            </li>
+            <li class="nav-item" onclick="switchNav(4)">
+                <span class="nav-num">05.</span> Solar PV Monitoring
+            </li>
+            <li class="nav-item" onclick="switchNav(5)">
+                <span class="nav-num">06.</span> Model Evaluation
+            </li>
+            <li class="nav-item" onclick="switchNav(6)">
+                <span class="nav-num">07.</span> Dataset Analytics
+            </li>
+            <li class="nav-item" onclick="switchNav(7)">
+                <span class="nav-num">08.</span> System & API
+            </li>
+        </ul>
+
+        <div class="status-box">
+            <div class="status-pill" id="api-status-pill">
+                <div class="status-dot"></div>
+                <span id="api-status-text">Backend Connected</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Viewport -->
+    <main>
+        <!-- Offline Fail-Safe Banner -->
+        <div class="alert-banner" id="disconnect-banner">
+            <div>
+                <strong>⚠️ Backend ML Engine Disconnected (Port 8000)</strong><br>
+                Predictions suspended. To restore pure ML inference, run: <code>uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload</code>
+            </div>
+            <button class="btn-secondary" onclick="checkApiHealth()">Retry</button>
+        </div>
+
+        <!-- 01. OVERVIEW -->
+        <section class="tab-section active" id="sec-0">
+            <div class="top-bar">
                 <div>
-                    <button class="btn-secondary" onclick="startStream()">▶ Start Stream</button>
-                    <button class="btn-secondary" onclick="pauseStream()">⏸ Pause</button>
-                    <button class="btn-secondary" onclick="injectFault('sag')">⚡ Inject Voltage Sag</button>
-                    <button class="btn-secondary" onclick="injectFault('overload')">⚡ Inject Current Overload</button>
-                    <button class="btn-secondary" onclick="injectFault('outage')">⚡ Inject Supply Outage</button>
-                </div>
-
-                <div style="margin-top: 20px;">
-                    <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-muted);">
-                        <span>Live AC Voltage Waveform (V)</span>
-                        <span id="stream-status" style="color: var(--success); font-weight: 600;">Status: Streaming Normal Baseline</span>
-                    </div>
-                    <canvas id="voltageCanvas" class="stream-canvas" width="1200" height="160"></canvas>
+                    <div class="tab-title">Platform Overview & System KPIs</div>
+                    <div class="tab-subtitle">Real-time status of 1.81 Million dataset benchmark and active electrical monitoring nodes.</div>
                 </div>
             </div>
-        </div>
 
-        <!-- TAB 3: Solar PV Inverter Adapter -->
-        <div class="tab-content" id="tab-2">
-            <div class="card">
-                <h3 style="margin-bottom: 18px; color: var(--primary);">Photovoltaic Inverter Telemetry Adapter</h3>
-                <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
-                    Translates solar string / inverter readings directly into standardized electrical fault features without fabricating data channels.
-                </p>
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>PV Inverter AC Voltage (V)</label>
-                        <input type="number" id="pv_v" value="230.5" step="0.5">
-                    </div>
-                    <div class="form-group">
-                        <label>PV Inverter AC Current (A)</label>
-                        <input type="number" id="pv_i" value="14.2" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>Inverter Active Output Power (W)</label>
-                        <input type="number" id="pv_p" value="3250.0" step="10">
-                    </div>
-                    <div class="form-group">
-                        <label>Inverter Power Factor</label>
-                        <input type="number" id="pv_pf" value="0.99" step="0.01">
-                    </div>
+            <div class="grid-4">
+                <div class="card">
+                    <div class="card-title">Dataset Scale</div>
+                    <div class="card-val" style="color: var(--primary);">1,814,400</div>
+                    <div class="card-sub">Total 1 Hz observations across 3 stations</div>
                 </div>
-                <button class="btn-primary" onclick="diagnosePV()">☀️ Process Solar PV Telemetry</button>
-
-                <div class="result-panel" id="pv-result">
-                    <div class="grid-2">
-                        <div>
-                            <div class="result-title">Apparent Power Derived (S = V × I)</div>
-                            <div class="result-val" id="pv-res-power" style="color: var(--primary);">3,273 VA</div>
-                        </div>
-                        <div>
-                            <div class="result-title">Reactive Power Derived (Q = √(S² - P²))</div>
-                            <div class="result-val" id="pv-res-q" style="color: var(--accent);">387 VAR</div>
-                        </div>
-                    </div>
+                <div class="card">
+                    <div class="card-title">Normal Baseline</div>
+                    <div class="card-val" style="color: var(--success);">98.34%</div>
+                    <div class="card-sub">1,784,258 nominal records</div>
                 </div>
-            </div>
-        </div>
-
-        <!-- TAB 4: Benchmark Explorer -->
-        <div class="tab-content" id="tab-3">
-            <div class="card">
-                <h3 style="margin-bottom: 12px; color: var(--primary);">Fault Category Pipeline Benchmark (9 Classes)</h3>
-                <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 15px;">
-                    Evaluated on held-out test samples under strict Group-Aware Cross-Validation:
-                </p>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Model Architecture</th>
-                            <th>Accuracy</th>
-                            <th>Macro-F1</th>
-                            <th>Macro-Precision</th>
-                            <th>Macro-Recall</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {cat_table_html}
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="card">
-                <h3 style="margin-bottom: 12px; color: var(--primary);">Fault Severity Pipeline Benchmark (6 Grades)</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Model Architecture</th>
-                            <th>Accuracy</th>
-                            <th>Macro-F1</th>
-                            <th>Macro-Precision</th>
-                            <th>Macro-Recall</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {sev_table_html}
-                    </tbody>
-                </table>
+                <div class="card">
+                    <div class="card-title">Controlled Anomalies</div>
+                    <div class="card-val" style="color: var(--accent);">30,142</div>
+                    <div class="card-sub">254 distinct physical fault events</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Stage 1 Anomaly Recall</div>
+                    <div class="card-val" style="color: #38bdf8;">94.95%</div>
+                    <div class="card-sub">Tuned safety threshold τ = 0.125</div>
+                </div>
             </div>
 
             <div class="grid-2">
                 <div class="card">
-                    <h3 style="margin-bottom: 10px; color: var(--primary);">Normalized Confusion Matrix</h3>
-                    <div class="img-container">
-                        <img src="{img_cm_base64}" alt="Stacking Confusion Matrix">
+                    <div class="card-header">
+                        <div class="card-title">Fault Category Distribution (30,142 Anomalies)</div>
                     </div>
+                    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+                        • <strong>Load Faults</strong>: 6,267 (20.8%)<br>
+                        • <strong>Sensor Artifacts</strong>: 4,897 (16.2%)<br>
+                        • <strong>Power Quality (Low PF)</strong>: 4,357 (14.5%)<br>
+                        • <strong>Operating Context</strong>: 4,282 (14.2%)<br>
+                        • <strong>Compound Faults</strong>: 4,105 (13.6%)<br>
+                        • <strong>Voltage Sags / Swells</strong>: 2,984 (9.9%)<br>
+                        • <strong>Supply Outages</strong>: 2,174 (7.2%)<br>
+                        • <strong>Frequency Excursions</strong>: 1,076 (3.6%)
+                    </p>
                 </div>
                 <div class="card">
-                    <h3 style="margin-bottom: 10px; color: var(--primary);">Model Performance Comparison</h3>
-                    <div class="img-container">
-                        <img src="{img_comp_base64}" alt="Model Comparison Plot">
+                    <div class="card-header">
+                        <div class="card-title">Controlled Severity Distribution</div>
+                    </div>
+                    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+                        • <strong>High Severity</strong>: 8,407 records<br>
+                        • <strong>Incipient Faults</strong>: 6,959 records<br>
+                        • <strong>Medium Severity (med)</strong>: 5,969 records<br>
+                        • <strong>Low Severity</strong>: 5,550 records<br>
+                        • <strong>Critical Faults</strong>: 3,257 records (Safety-weighted 5x)
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 02. LIVE MONITORING -->
+        <section class="tab-section" id="sec-1">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">Real-Time 1 Hz Telemetry Stream Simulator</div>
+                    <div class="tab-subtitle">Live IoT continuous circular stream. Ingests simulated telemetry directly into FastAPI inference.</div>
+                </div>
+                <div>
+                    <button class="btn-primary" id="btn-stream-toggle" onclick="toggleStream()">▶ Start 1 Hz Stream</button>
+                    <button class="btn-secondary" onclick="resetStream()">Reset</button>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <span style="font-size: 13px; color: var(--text-muted); margin-right: 12px;">Inject Controlled Faults:</span>
+                <button class="btn-secondary" onclick="injectFault('normal')">✓ Nominal Grid</button>
+                <button class="btn-secondary" onclick="injectFault('sag')">⚡ Voltage Sag (175V)</button>
+                <button class="btn-secondary" onclick="injectFault('overload')">⚡ Inverter Overcurrent (24.5A)</button>
+                <button class="btn-secondary" onclick="injectFault('outage')">⚡ Grid Outage (0V)</button>
+            </div>
+
+            <div class="grid-4">
+                <div class="card">
+                    <div class="card-title">Live AC Voltage</div>
+                    <div class="card-val" id="live-v">220.0 V</div>
+                    <div class="card-sub">Nominal 220.0 ±10%</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Live AC Current</div>
+                    <div class="card-val" id="live-i">5.0 A</div>
+                    <div class="card-sub">Rated branch limit: 20 A</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Live Active Power</div>
+                    <div class="card-val" id="live-p">1,078 W</div>
+                    <div class="card-sub">Dynamic P = V * I * PF</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Live ML Status</div>
+                    <div class="card-val" id="live-status" style="color: var(--success); font-size: 20px;">NOMINAL</div>
+                    <div class="card-sub" id="live-prob">Stage 1 Anom Prob: 1.2%</div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 20px;">
+                <div class="card-title" style="margin-bottom: 12px;">Live Line Voltage Waveform (1 Hz Telemetry Buffer)</div>
+                <canvas id="waveformCanvas" class="stream-canvas" width="1200" height="140"></canvas>
+            </div>
+        </section>
+
+        <!-- 03. FAULT DIAGNOSIS -->
+        <section class="tab-section" id="sec-2">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">Two-Stage Hierarchical Fault Diagnosis</div>
+                    <div class="tab-subtitle">Stage 1 Binary Anomaly Filter (τ = 0.125) + Stage 2 Residual Stacking Classifiers.</div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-title" style="margin-bottom: 16px;">Manual Sensor Telemetry Input</div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>AC Voltage (V) [Mandatory]</label>
+                        <input type="number" id="diag_v" value="220.0" step="0.5">
+                    </div>
+                    <div class="form-group">
+                        <label>AC Current (A) [Mandatory]</label>
+                        <input type="number" id="diag_i" value="5.2" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>Active Power (W) [Optional]</label>
+                        <input type="number" id="diag_p" value="1144.0" step="10">
+                    </div>
+                    <div class="form-group">
+                        <label>Frequency (Hz) [Optional]</label>
+                        <input type="number" id="diag_f" value="50.0" step="0.05">
+                    </div>
+                    <div class="form-group">
+                        <label>Power Factor (cos φ) [Optional]</label>
+                        <input type="number" id="diag_pf" value="0.98" step="0.01">
+                    </div>
+                    <div class="form-group" style="justify-content: flex-end;">
+                        <button class="btn-primary" onclick="runManualDiagnosis()">⚡ Execute ML Diagnosis</button>
+                    </div>
+                </div>
+
+                <div style="font-size: 12px; color: var(--text-muted);">
+                    Preset Test Scenarios: 
+                    <a href="javascript:void(0)" onclick="setPreset(220, 5.2, 1144, 50, 0.98)" style="color: var(--primary); margin-left: 6px;">Nominal Baseline</a> |
+                    <a href="javascript:void(0)" onclick="setPreset(178, 4.5, 760, 50, 0.95)" style="color: var(--primary); margin-left: 6px;">Voltage Sag (178V)</a> |
+                    <a href="javascript:void(0)" onclick="setPreset(225, 26.0, 5700, 50, 0.96)" style="color: var(--primary); margin-left: 6px;">Current Overload (26A)</a> |
+                    <a href="javascript:void(0)" onclick="setPreset(0, 0, 0, 50, 0)" style="color: var(--primary); margin-left: 6px;">Grid Outage (0V)</a>
+                </div>
+            </div>
+
+            <div class="card" id="diag-results-box" style="display: none;">
+                <div class="card-header">
+                    <div class="card-title">Real-Time Inference Results (FastAPI ML Service)</div>
+                    <span id="diag-badge" class="badge badge-normal">Normal Baseline</span>
+                </div>
+
+                <div class="grid-3">
+                    <div class="card" style="background: #090d16;">
+                        <div class="card-title">Stage 1: Binary Filter</div>
+                        <div class="card-val" id="diag-s1-val" style="font-size: 20px;">Nominal (3.4%)</div>
+                        <div class="card-sub">Decision threshold τ = 0.125</div>
+                    </div>
+                    <div class="card" style="background: #090d16;">
+                        <div class="card-title">Stage 2A: Fault Category</div>
+                        <div class="card-val" id="diag-cat-val" style="font-size: 20px; color: var(--primary);">Normal</div>
+                        <div class="card-sub" id="diag-cat-conf">Confidence: 96.6%</div>
+                    </div>
+                    <div class="card" style="background: #090d16;">
+                        <div class="card-title">Stage 2B: Severity Grade</div>
+                        <div class="card-val" id="diag-sev-val" style="font-size: 20px; color: var(--accent);">None</div>
+                        <div class="card-sub" id="diag-sev-conf">Confidence: 96.6%</div>
+                    </div>
+                </div>
+
+                <div style="background: #090d16; border: 1px solid var(--border); border-radius: 8px; padding: 16px;">
+                    <div style="font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 8px;">💡 Physics-Guided Diagnostic Indicators:</div>
+                    <div id="diag-triggers" style="font-size: 13px; color: var(--text-muted); line-height: 1.6;"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 04. STACKING ENSEMBLE -->
+        <section class="tab-section" id="sec-3">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">Stacking Ensemble & Model Intelligence</div>
+                    <div class="tab-subtitle">Visual architecture of Level 0 Base Learners, 5-Fold OOF Predictions, and Level 1 Meta-Learners.</div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-title" style="margin-bottom: 16px;">Residual Stacking Ensemble Flowchart</div>
+                <div class="arch-container">
+                    <svg width="1000" height="260" viewBox="0 0 1000 260">
+                        <!-- Input Block -->
+                        <rect x="20" y="90" width="160" height="80" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+                        <text x="100" y="125" fill="#fff" font-weight="700" font-size="13" text-anchor="middle">16 Operational</text>
+                        <text x="100" y="145" fill="#9ca3af" font-size="11" text-anchor="middle">Feature Vector</text>
+
+                        <!-- Lines to Level 0 -->
+                        <line x1="180" y1="130" x2="260" y2="40" stroke="#475569" stroke-width="2"/>
+                        <line x1="180" y1="130" x2="260" y2="85" stroke="#475569" stroke-width="2"/>
+                        <line x1="180" y1="130" x2="260" y2="130" stroke="#475569" stroke-width="2"/>
+                        <line x1="180" y1="130" x2="260" y2="175" stroke="#475569" stroke-width="2"/>
+                        <line x1="180" y1="130" x2="260" y2="220" stroke="#475569" stroke-width="2"/>
+
+                        <!-- Level 0 Base Learners -->
+                        <rect x="260" y="20" width="180" height="35" rx="6" fill="#111827" stroke="#475569"/>
+                        <text x="350" y="42" fill="#fff" font-size="12" text-anchor="middle">Hist Gradient Boosting</text>
+
+                        <rect x="260" y="65" width="180" height="35" rx="6" fill="#111827" stroke="#475569"/>
+                        <text x="350" y="87" fill="#fff" font-size="12" text-anchor="middle">Random Forest (120 Trees)</text>
+
+                        <rect x="260" y="110" width="180" height="35" rx="6" fill="#111827" stroke="#475569"/>
+                        <text x="350" y="132" fill="#fff" font-size="12" text-anchor="middle">Extra Trees (120 Trees)</text>
+
+                        <rect x="260" y="155" width="180" height="35" rx="6" fill="#111827" stroke="#475569"/>
+                        <text x="350" y="177" fill="#fff" font-size="12" text-anchor="middle">Linear SGD (Log Loss)</text>
+
+                        <rect x="260" y="200" width="180" height="35" rx="6" fill="#111827" stroke="#475569"/>
+                        <text x="350" y="222" fill="#fff" font-size="12" text-anchor="middle">K-Nearest Neighbors</text>
+
+                        <!-- Meta Feature Block -->
+                        <rect x="520" y="80" width="170" height="100" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+                        <text x="605" y="115" fill="#fff" font-weight="700" font-size="12" text-anchor="middle">5-Fold OOF Predictions</text>
+                        <text x="605" y="135" fill="#f59e0b" font-weight="600" font-size="11" text-anchor="middle">+ Soft-Voting Consensus</text>
+                        <text x="605" y="155" fill="#9ca3af" font-size="10" text-anchor="middle">(Residual Skip Connection)</text>
+
+                        <!-- Lines to Meta Feature -->
+                        <line x1="440" y1="37" x2="520" y2="130" stroke="#475569"/>
+                        <line x1="440" y1="82" x2="520" y2="130" stroke="#475569"/>
+                        <line x1="440" y1="127" x2="520" y2="130" stroke="#475569"/>
+                        <line x1="440" y1="172" x2="520" y2="130" stroke="#475569"/>
+                        <line x1="440" y1="217" x2="520" y2="130" stroke="#475569"/>
+
+                        <!-- Level 1 Meta Learner -->
+                        <line x1="690" y1="130" x2="760" y2="130" stroke="#f59e0b" stroke-width="2"/>
+                        <rect x="760" y="90" width="190" height="80" rx="8" fill="#111827" stroke="#10b981" stroke-width="2"/>
+                        <text x="855" y="125" fill="#10b981" font-weight="700" font-size="13" text-anchor="middle">Level 1: Meta-Learner</text>
+                        <text x="855" y="145" fill="#fff" font-size="12" text-anchor="middle">Logistic Regression (L2)</text>
+                    </svg>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-title">Ensemble Architecture Comparison</div>
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border); text-align: left; color: var(--text-muted);">
+                                <th style="padding: 8px;">Architecture</th>
+                                <th style="padding: 8px;">Mechanism</th>
+                                <th style="padding: 8px;">Isolated Stage 2 F1</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid var(--border);">
+                                <td style="padding: 10px 8px; font-weight: 600; color: var(--primary);">Soft Voting</td>
+                                <td style="padding: 10px 8px; color: var(--text-muted);">Uniform Probability Average</td>
+                                <td style="padding: 10px 8px; font-weight: 700; color: #fff;">70.35%</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 10px 8px; font-weight: 600; color: var(--success);">Residual Stacking</td>
+                                <td style="padding: 10px 8px; color: var(--text-muted);">Learned Meta-Model + Consensus</td>
+                                <td style="padding: 10px 8px; font-weight: 700; color: #fff;">64.02%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Why Stacking Differs From Soft Voting</div>
+                    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-top: 10px;">
+                        • <strong>Soft Voting</strong> averages probability vectors across base models without learning class-dependent weights.<br>
+                        • <strong>Residual Stacking</strong> fits a Logistic Regression meta-learner on 5-fold Out-Of-Fold predictions, learning which base classifier to trust for each fault type while incorporating consensus probabilities.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 05. SOLAR PV MONITORING -->
+        <section class="tab-section" id="sec-4">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">Solar PV Inverter Monitoring (AhoyDTU / OpenDTU)</div>
+                    <div class="tab-subtitle">Direct microinverter ingestion. Maps AC parameters to ML fault detection and isolates DC string yield analytics.</div>
+                </div>
+            </div>
+
+            <div class="grid-4">
+                <div class="card">
+                    <div class="card-title">Inverter Efficiency (η)</div>
+                    <div class="card-val" id="pv-eff" style="color: var(--success);">95.9%</div>
+                    <div class="card-sub">η = (P_ac / Σ P_dc) * 100</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Total DC Array Power</div>
+                    <div class="card-val" id="pv-total-dc">13.0 W</div>
+                    <div class="card-sub">Channels 1–4 aggregated</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">AC Output Power</div>
+                    <div class="card-val" id="pv-ac-power">12.5 W</div>
+                    <div class="card-sub">Grid-tie active power</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">AC Reactive Power (Q)</div>
+                    <div class="card-val" id="pv-ac-q">19.6 VAR</div>
+                    <div class="card-sub">Q = sqrt(S² - P²)</div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-title" style="margin-bottom: 14px;">Hoymiles / AhoyDTU Multi-Channel DC String Telemetry</div>
+                <div class="grid-4">
+                    <div class="card" style="background: #090d16;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--primary);">Channel 1</div>
+                        <div style="font-size: 18px; font-weight: 700; margin-top: 4px;">27.1 V | 0.12 A</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Power: 3.25 W</div>
+                    </div>
+                    <div class="card" style="background: #090d16;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--primary);">Channel 2</div>
+                        <div style="font-size: 18px; font-weight: 700; margin-top: 4px;">27.1 V | 0.13 A</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Power: 3.52 W</div>
+                    </div>
+                    <div class="card" style="background: #090d16;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--primary);">Channel 3</div>
+                        <div style="font-size: 18px; font-weight: 700; margin-top: 4px;">26.1 V | 0.12 A</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Power: 3.13 W</div>
+                    </div>
+                    <div class="card" style="background: #090d16;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--primary);">Channel 4</div>
+                        <div style="font-size: 18px; font-weight: 700; margin-top: 4px;">26.1 V | 0.12 A</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Power: 3.13 W</div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
+        </section>
+
+        <!-- 06. MODEL EVALUATION -->
+        <section class="tab-section" id="sec-5">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">Model Evaluation & Cascaded Confusion Matrices</div>
+                    <div class="tab-subtitle">Empirical performance evaluated across 348,899 test observations without data leakage.</div>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-title" style="margin-bottom: 12px;">Cascaded Fault Category Confusion Matrix</div>
+                    <div class="img-container">
+                        <img src="/reports/figures/cascaded_category_confusion_matrix.png" alt="Category Confusion Matrix" onerror="this.alt='Matrix will render upon test completion';">
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-title" style="margin-bottom: 12px;">Cascaded Fault Severity Confusion Matrix</div>
+                    <div class="img-container">
+                        <img src="/reports/figures/cascaded_severity_confusion_matrix.png" alt="Severity Confusion Matrix" onerror="this.alt='Matrix will render upon test completion';">
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 07. DATASET ANALYTICS -->
+        <section class="tab-section" id="sec-6">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">Zenodo Controlled-Fault Benchmark Analytics</div>
+                    <div class="tab-subtitle">1,814,400 per-second observations across 3 physical monitoring stations.</div>
+                </div>
+            </div>
+
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-title">Station 1: Laboratory</div>
+                    <div class="card-val">604,800</div>
+                    <div class="card-sub">Baseline load ~661 W | 92 Fault Events</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Station 2: Residential</div>
+                    <div class="card-val">604,800</div>
+                    <div class="card-sub">Medium load ~685 W | 84 Fault Events</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Station 3: Industrial</div>
+                    <div class="card-val">604,800</div>
+                    <div class="card-sub">Inductive load ~4,255 W | 78 Fault Events</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 08. SYSTEM & API -->
+        <section class="tab-section" id="sec-7">
+            <div class="top-bar">
+                <div>
+                    <div class="tab-title">System & API Status</div>
+                    <div class="tab-subtitle">FastAPI REST interface, active model hashes, and operational feature schema.</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title" style="margin-bottom: 14px;">Unified 16-Feature Operational Schema Inspector</div>
+                <pre style="background: #090d16; padding: 16px; border-radius: 6px; font-size: 13px; color: #38bdf8; overflow-x: auto;">
+1.  voltage_V                   (AC Line Voltage in Volts)
+2.  current_A                   (AC Line Current in Amperes)
+3.  power_W                     (Active Real Power in Watts)
+4.  frequency_Hz                (Grid Supply Frequency in Hertz)
+5.  power_factor                (Displacement Power Factor cos φ)
+6.  apparent_power_VA           (S = |V| * |I|)
+7.  reactive_power_var          (Q = sqrt(max(0, S² - P²)))
+8.  power_active_apparent_ratio (Active to Apparent Ratio |P| / S)
+9.  voltage_deviation_pct       ((V - 220) / 220 * 100)
+10. frequency_deviation_pct     ((f - 50) / 50 * 100)
+11. d_voltage_dt                (Causal Voltage Derivative |V_t - V_{t-1}|)
+12. d_current_dt                (Causal Current Derivative |I_t - I_{t-1}|)
+13. d_power_dt                  (Causal Power Derivative |P_t - P_{t-1}|)
+14. rolling_std_v5              (5-Second Moving Voltage Volatility)
+15. rolling_std_i5              (5-Second Moving Current Volatility)
+16. power_to_baseline_ratio     (Station-Invariant Ratio P_t / P_{30s})
+                </pre>
+            </div>
+        </section>
+    </main>
 
     <script>
-        function switchTab(index) {{
-            document.querySelectorAll('.tab-btn').forEach((btn, i) => {{
-                btn.classList.toggle('active', i === index);
-            }});
-            document.querySelectorAll('.tab-content').forEach((content, i) => {{
-                content.classList.toggle('active', i === index);
-            }});
-        }}
+        // Navigation Switcher
+        function switchNav(idx) {
+            document.querySelectorAll('.nav-item').forEach((item, i) => {
+                item.classList.toggle('active', i === idx);
+            });
+            document.querySelectorAll('.tab-section').forEach((sec, i) => {
+                sec.classList.toggle('active', i === idx);
+            });
+        }
 
-        async function diagnoseTwoStage() {{
-            const v = parseFloat(document.getElementById('v_in').value);
-            const i = parseFloat(document.getElementById('i_in').value);
-            const p = parseFloat(document.getElementById('p_in').value);
-            const f = parseFloat(document.getElementById('f_in').value);
-            const pf = parseFloat(document.getElementById('pf_in').value);
-            const dv = parseFloat(document.getElementById('dv_in').value);
+        // Check FastAPI Backend Health
+        let isBackendOnline = false;
+        async function checkApiHealth() {
+            try {
+                const res = await fetch("http://localhost:8000/health", { cache: "no-store" });
+                if (res.ok) {
+                    isBackendOnline = true;
+                    document.getElementById('api-status-pill').className = "status-pill";
+                    document.getElementById('api-status-text').innerText = "Backend Connected";
+                    document.getElementById('disconnect-banner').style.display = "none";
+                } else {
+                    throw new Error();
+                }
+            } catch (e) {
+                isBackendOnline = false;
+                document.getElementById('api-status-pill').className = "status-pill offline";
+                document.getElementById('api-status-text').innerText = "Backend Disconnected";
+                document.getElementById('disconnect-banner').style.display = "flex";
+            }
+        }
+        setInterval(checkApiHealth, 3000);
+        checkApiHealth();
 
-            let isAnom = false;
-            let cat = "Normal Operation";
-            let sev = "None";
-            let badgeClass = "badge-normal";
-            let triggers = [];
+        // Preset Scenario Setter
+        function setPreset(v, i, p, f, pf) {
+            document.getElementById('diag_v').value = v;
+            document.getElementById('diag_i').value = i;
+            document.getElementById('diag_p').value = p;
+            document.getElementById('diag_f').value = f;
+            document.getElementById('diag_pf').value = pf;
+            runManualDiagnosis();
+        }
 
-            try {{
-                const payload = {{
-                    voltage_V: v,
-                    current_A: i,
-                    power_W: p,
-                    frequency_Hz: f,
-                    power_factor: pf,
-                    thd_V: 1.2,
-                    thd_I: 2.1,
-                    phase_angle_deg: 18.0,
-                    unbalance_V: 0.5
-                }};
+        // Manual Diagnosis Execution
+        async function runManualDiagnosis() {
+            if (!isBackendOnline) {
+                alert("Cannot run diagnosis: FastAPI ML Engine is offline on port 8000.");
+                return;
+            }
 
-                const response = await fetch("http://localhost:8000/predict/two-stage", {{
+            const payload = {
+                voltage_V: parseFloat(document.getElementById('diag_v').value),
+                current_A: parseFloat(document.getElementById('diag_i').value),
+                power_W: parseFloat(document.getElementById('diag_p').value),
+                frequency_Hz: parseFloat(document.getElementById('diag_f').value),
+                power_factor: parseFloat(document.getElementById('diag_pf').value)
+            };
+
+            try {
+                const res = await fetch("http://localhost:8000/predict/two-stage", {
                     method: "POST",
-                    headers: {{ "Content-Type": "application/json" }},
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
-                }});
+                });
+                const data = await res.json();
 
-                if (response.ok) {{
-                    const data = await response.json();
-                    isAnom = data.is_anomaly;
-                    cat = data.fault_category;
-                    sev = data.fault_severity;
-                    badgeClass = isAnom ? (sev.toLowerCase() === "critical" ? "badge-danger" : "badge-warning") : "badge-normal";
-                    triggers = data.shap_triggers || [];
-                }} else {{
-                    throw new Error("HTTP error " + response.status);
-                }}
-            }} catch (err) {{
-                // Fallback: evaluate outage condition strictly before voltage sag
-                if (v < 20.0 && p === 0.0) {{
-                    isAnom = true;
-                    cat = "Supply Outage";
-                    sev = "Critical";
-                    badgeClass = "badge-danger";
-                    triggers.push("Total line de-energization and null active power detected.");
-                }} else if (v < 198.0) {{
-                    isAnom = true;
-                    cat = "Voltage Sag / Dip";
-                    sev = "High";
-                    badgeClass = "badge-danger";
-                    triggers.push(`Line Voltage dropped to ${{v}} V (< 198V statutory threshold).`);
-                    if (dv > 10.0) triggers.push(`High transient derivative dV/dt = ${{dv}} V/s.`);
-                }} else if (v > 242.0) {{
-                    isAnom = true;
-                    cat = "Voltage Swell / Overvoltage";
-                    sev = "Medium";
-                    badgeClass = "badge-warning";
-                    triggers.push(`Line Voltage rose to ${{v}} V (> 242V nominal ceiling).`);
-                }} else if (pf < 0.80) {{
-                    isAnom = true;
-                    cat = "Power Quality (Low PF)";
-                    sev = "Medium";
-                    badgeClass = "badge-warning";
-                    triggers.push(`Elevated reactive power consumption (Power Factor: ${{pf}}).`);
-                }} else if (Math.abs(f - 50.0) >= 0.8) {{
-                    isAnom = true;
-                    cat = "Frequency Excursion";
-                    sev = "High";
-                    badgeClass = "badge-danger";
-                    triggers.push(`AC frequency deviated to ${{f}} Hz (50.0 ± 0.5 Hz nominal).`);
-                }} else if (i > 30.0) {{
-                    isAnom = true;
-                    cat = "Current Overload";
-                    sev = "High";
-                    badgeClass = "badge-danger";
-                    triggers.push(`Branch current draw reached ${{i}} A exceeding rating.`);
-                }}
-            }}
+                document.getElementById('diag-results-box').style.display = "block";
+                
+                // Stage 1
+                document.getElementById('diag-s1-val').innerText = (data.is_anomaly ? "Anomaly Flagged (" : "Nominal (") + (data.stage1_probability * 100).toFixed(1) + "%)";
+                document.getElementById('diag-s1-val').style.color = data.is_anomaly ? "var(--danger)" : "var(--success)";
+                
+                // Stage 2
+                document.getElementById('diag-cat-val').innerText = data.fault_category;
+                document.getElementById('diag-cat-conf').innerText = "Confidence: " + (data.category_confidence * 100).toFixed(1) + "%";
+                document.getElementById('diag-sev-val').innerText = data.fault_severity;
+                document.getElementById('diag-sev-conf').innerText = "Confidence: " + (data.severity_confidence * 100).toFixed(1) + "%";
 
-            // Stage 1 output
-            document.getElementById('res-stage1').innerText = isAnom ? "Anomaly Detected" : "Normal Baseline";
-            document.getElementById('res-stage1').style.color = isAnom ? "var(--danger)" : "var(--success)";
-            document.getElementById('badge-stage1').className = `badge ${{isAnom ? 'badge-danger' : 'badge-normal'}}`;
-            document.getElementById('badge-stage1').innerText = isAnom ? "Trigger" : "Pass";
+                const isCrit = data.fault_severity.toLowerCase() === "critical";
+                document.getElementById('diag-badge').className = "badge " + (data.is_anomaly ? (isCrit ? "badge-danger" : "badge-warning") : "badge-normal");
+                document.getElementById('diag-badge').innerText = data.is_anomaly ? (isCrit ? "Critical Hazard" : "Anomaly Detected") : "Normal Baseline";
 
-            // Stage 2 outputs
-            document.getElementById('res-stage2-cat').innerText = cat;
-            document.getElementById('res-stage2-sev').innerText = sev;
-            document.getElementById('badge-stage2-cat').className = `badge ${{badgeClass}}`;
-            document.getElementById('badge-stage2-cat').innerText = cat.split(' ')[0];
-            document.getElementById('badge-stage2-sev').className = `badge ${{badgeClass}}`;
-            document.getElementById('badge-stage2-sev').innerText = sev;
+                const triggers = data.physics_attributions || [];
+                document.getElementById('diag-triggers').innerHTML = triggers.length ? triggers.map(t => `<div>• ${t}</div>`).join('') : "• All measurements conform to statutory grid bounds (220V ±10%, 50Hz ±1%).";
+            } catch (err) {
+                alert("Error during model inference: " + err.message);
+            }
+        }
 
-            // SHAP Feature Attribution
-            if (triggers.length === 0) triggers.push("All electrical measurements conform to standard statutory bounds (220V ±10%, 50Hz ±1%).");
-            document.getElementById('shap-triggers').innerHTML = triggers.map(t => `<div class="shap-item">✓ ${{t}}</div>`).join('');
-            document.getElementById('diagnosis-result').style.display = "block";
-        }}
-
-        function diagnosePV() {{
-            const v = parseFloat(document.getElementById('pv_v').value);
-            const i = parseFloat(document.getElementById('pv_i').value);
-            const p = parseFloat(document.getElementById('pv_p').value);
-            const s = Math.round(v * i);
-            const q = Math.round(Math.sqrt(Math.max(0, (s * s) - (p * p))));
-
-            document.getElementById('pv-res-power').innerText = s.toLocaleString() + " VA";
-            document.getElementById('pv-res-q').innerText = q.toLocaleString() + " VAR";
-            document.getElementById('pv-result').style.display = "block";
-        }}
-
-        // Stream Simulator Logic
+        // Live 1 Hz Telemetry Stream Simulator
         let streamInterval = null;
-        let waveData = Array(60).fill(220.0);
-        let faultState = null;
+        let waveBuffer = Array(60).fill(220.0);
 
-        function drawWave() {{
-            const canvas = document.getElementById('voltageCanvas');
+        function drawWaveform() {
+            const canvas = document.getElementById('waveformCanvas');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw Grid Lines
-            ctx.strokeStyle = "#1a2540";
+            // Draw grid guides
+            ctx.strokeStyle = "#1e293b";
             ctx.lineWidth = 1;
-            for (let y = 30; y < canvas.height; y += 40) {{
+            for (let y = 20; y < canvas.height; y += 30) {
                 ctx.beginPath();
                 ctx.moveTo(0, y);
                 ctx.lineTo(canvas.width, y);
                 ctx.stroke();
-            }}
+            }
 
-            // Draw Voltage Line
-            ctx.strokeStyle = faultState ? "#ef4444" : "#38bdf8";
+            // Draw live voltage waveform
+            ctx.strokeStyle = "#38bdf8";
             ctx.lineWidth = 2.5;
             ctx.beginPath();
-            const step = canvas.width / waveData.length;
-            waveData.forEach((val, idx) => {{
-                // Scale 220V near center
-                const y = canvas.height - ((val - 150) / 120) * canvas.height;
-                if (idx === 0) ctx.moveTo(0, y);
-                else ctx.lineTo(idx * step, y);
-            }});
+            const step = canvas.width / (waveBuffer.length - 1);
+            waveBuffer.forEach((val, i) => {
+                const y = canvas.height - ((val - 140) / 120) * canvas.height;
+                if (i === 0) ctx.moveTo(0, y);
+                else ctx.lineTo(i * step, y);
+            });
             ctx.stroke();
-        }}
+        }
 
-        function updateStream() {{
-            let nextVal = 220.0 + (Math.random() * 2.0 - 1.0);
-            if (faultState === 'sag') nextVal = 184.0 + (Math.random() * 2.0 - 1.0);
-            else if (faultState === 'overload') nextVal = 205.0 + (Math.random() * 3.0 - 1.5);
-            else if (faultState === 'outage') nextVal = 0.0;
+        async function tickStream() {
+            if (!isBackendOnline) return;
+            try {
+                const res = await fetch("http://localhost:8000/stream/step");
+                const data = await res.json();
+                const tel = data.telemetry;
+                const diag = data.diagnosis;
 
-            waveData.shift();
-            waveData.push(nextVal);
-            drawWave();
-        }}
+                document.getElementById('live-v').innerText = tel.voltage_V.toFixed(1) + " V";
+                document.getElementById('live-i').innerText = tel.current_A.toFixed(1) + " A";
+                document.getElementById('live-p').innerText = tel.power_W.toLocaleString() + " W";
+                
+                document.getElementById('live-status').innerText = diag.is_anomaly ? diag.fault_category.toUpperCase() : "NOMINAL";
+                document.getElementById('live-status').style.color = diag.is_anomaly ? "var(--danger)" : "var(--success)";
+                document.getElementById('live-prob').innerText = "Stage 1 Anom Prob: " + (diag.stage1_probability * 100).toFixed(1) + "%";
 
-        function startStream() {{
-            if (!streamInterval) {{
-                // 1000 ms strictly simulates true 1 Hz IoT sampling rate
-                streamInterval = setInterval(updateStream, 1000);
-                document.getElementById('stream-status').innerText = "Status: Streaming Live 1 Hz Grid Feed";
-            }}
-        }}
+                waveBuffer.shift();
+                waveBuffer.push(tel.voltage_V);
+                drawWaveform();
+            } catch (e) {}
+        }
 
-        function pauseStream() {{
-            clearInterval(streamInterval);
-            streamInterval = null;
-            document.getElementById('stream-status').innerText = "Status: Stream Paused";
-        }}
+        function toggleStream() {
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+                document.getElementById('btn-stream-toggle').innerText = "▶ Start 1 Hz Stream";
+            } else {
+                streamInterval = setInterval(tickStream, 1000);
+                document.getElementById('btn-stream-toggle').innerText = "⏸ Pause Stream";
+            }
+        }
 
-        function injectFault(type) {{
-            faultState = type;
-            document.getElementById('stream-status').innerText = `ALERT: Injected Controlled ${{type.toUpperCase()}} Event!`;
-            document.getElementById('stream-status').style.color = "var(--danger)";
-            setTimeout(() => {{
-                faultState = null;
-                document.getElementById('stream-status').innerText = "Status: Grid Recovered to Normal Baseline";
-                document.getElementById('stream-status').style.color = "var(--success)";
-            }}, 5000);
-        }}
+        async function injectFault(type) {
+            if (!isBackendOnline) return;
+            await fetch("http://localhost:8000/stream/inject", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ fault_type: type })
+            });
+        }
 
-        window.onload = () => {{ drawWave(); }};
+        function resetStream() {
+            waveBuffer = Array(60).fill(220.0);
+            drawWaveform();
+            injectFault('normal');
+        }
+
+        drawWaveform();
     </script>
 </body>
 </html>
@@ -538,14 +954,27 @@ HTML_PAGE = f"""<!DOCTYPE html>
 
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        # Serve reports figures directly
+        if self.path.startswith("/reports/figures/"):
+            file_path = BASE_DIR / self.path.lstrip("/")
+            if file_path.exists():
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.end_headers()
+                with open(file_path, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+
+        # Serve Dashboard HTML
         self.send_response(200)
-        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(HTML_PAGE.encode("utf-8"))
 
 def run_server():
-    with socketserver.TCPServer(("", PORT), DashboardHandler) as httpd:
-        print(f"⚡ Advanced Dashboard live at: http://localhost:{PORT}")
+    server_address = ("", PORT)
+    with socketserver.TCPServer(server_address, DashboardHandler) as httpd:
+        print(f"⚡ PowerGuard AI Live at: http://localhost:{PORT}")
         httpd.serve_forever()
 
 if __name__ == "__main__":

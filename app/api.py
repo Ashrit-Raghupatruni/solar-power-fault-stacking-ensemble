@@ -1,30 +1,32 @@
 """
-FastAPI Real-Time Model Inference Service.
+FastAPI Real-Time Model Inference Service for PowerGuard AI.
 Serves:
-  1. POST /predict/two-stage: Live two-stage inference with physics-guided attribution.
-  2. GET /stream/step: 1 Hz telemetry tick simulator feeding real ML pipeline.
-  3. GET /health: Model discovery and health check status.
+  1. POST /predict/two-stage: Live two-stage inference (16 operational features) with physics-guided attribution.
+  2. POST /predict/solar-pv: Solar Inverter (AhoyDTU / OpenDTU) ingestion, DC string analytics & AC diagnosis.
+  3. GET /stream/step: 1 Hz telemetry tick simulator feeding real ML pipeline.
+  4. POST /stream/inject: Controls fault injection state for simulator.
+  5. GET /health: Model discovery, hashes, and health check status.
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import numpy as np
 import pandas as pd
 import joblib
 from typing import Optional, Dict, Any, List
 
 from src.config import (
-    MODELS_DIR, FEATURE_COLS,
+    MODELS_DIR, OPERATIONAL_FEATURE_COLS,
     STAGE2_FAULT_CATEGORIES, STAGE2_FAULT_SEVERITIES
 )
 from src.feature_engineering import add_electrical_features
 from src.explainability import explain_prediction_heuristic
 from src.model_registry import MODEL_REGISTRY
 from src.train import align_probabilities
+from src.pv_adapter import adapt_pv_telemetry
 
-app = FastAPI(title="Solar & Power System Fault Detection API", version="2.0")
+app = FastAPI(title="PowerGuard AI - Electrical & Solar Intelligence API", version="3.0")
 
-# Enable CORS for browser dashboard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,7 +35,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global model cache
 pipeline_cache = {}
 
 def get_pipeline():
@@ -44,7 +45,7 @@ def get_pipeline():
         
         pipeline_cache["scaler"] = joblib.load(scaler_p) if scaler_p.exists() else None
         pipeline_cache["stage1_model"] = joblib.load(s1_p) if s1_p.exists() else None
-        pipeline_cache["threshold"] = joblib.load(meta_p).get("threshold", 0.35) if meta_p.exists() else 0.35
+        pipeline_cache["threshold"] = joblib.load(meta_p).get("threshold", 0.125) if meta_p.exists() else 0.125
 
         # Stage 2 Category models
         cat_dir = MODELS_DIR / "stage2_fault_category"
@@ -54,7 +55,7 @@ def get_pipeline():
                 p = cat_dir / m_info["filename"]
                 if p.exists():
                     pipeline_cache["cat_models"][m_key] = joblib.load(p)
-            meta_p = cat_dir / "residual_stacking_meta_learner.pkl"
+            meta_p = cat_dir / "stacking_meta_learner.pkl"
             pipeline_cache["cat_meta"] = joblib.load(meta_p) if meta_p.exists() else None
         else:
             pipeline_cache["cat_meta"] = None
@@ -67,7 +68,7 @@ def get_pipeline():
                 p = sev_dir / m_info["filename"]
                 if p.exists():
                     pipeline_cache["sev_models"][m_key] = joblib.load(p)
-            meta_p = sev_dir / "residual_stacking_meta_learner.pkl"
+            meta_p = sev_dir / "stacking_meta_learner.pkl"
             pipeline_cache["sev_meta"] = joblib.load(meta_p) if meta_p.exists() else None
         else:
             pipeline_cache["sev_meta"] = None
@@ -75,24 +76,37 @@ def get_pipeline():
     return pipeline_cache
 
 class TelemetryPayload(BaseModel):
-    voltage_V: float = 220.0
-    current_A: float = 5.0
-    frequency_Hz: float = 50.0
-    power_W: float = 1100.0
-    power_factor: float = 0.98
-    thd_V: Optional[float] = 1.2
-    thd_I: Optional[float] = 2.1
-    phase_angle_deg: Optional[float] = 18.0
-    unbalance_V: Optional[float] = 0.5
-    wifi_rssi_dBm: Optional[float] = -65.0
-    station_id: Optional[int] = 1
+    voltage_V: float = Field(220.0, ge=0.0, le=500.0, description="AC Voltage in Volts")
+    current_A: float = Field(5.0, ge=0.0, le=200.0, description="AC Current in Amperes")
+    frequency_Hz: float = Field(50.0, ge=35.0, le=75.0, description="AC Frequency in Hertz")
+    power_W: Optional[float] = Field(None, description="Active Power in Watts")
+    power_factor: Optional[float] = Field(0.98, ge=-1.0, le=1.0, description="Power factor")
 
-# Stateful stream buffer for 1 Hz simulator
+class SolarPVPayload(BaseModel):
+    voltage_ac: float = Field(..., ge=0.0, le=500.0)
+    current_ac: float = Field(..., ge=0.0, le=100.0)
+    power_ac: Optional[float] = None
+    frequency_ac: Optional[float] = 50.0
+    power_factor: Optional[float] = 0.98
+    ch1_v: Optional[float] = None
+    ch1_i: Optional[float] = None
+    ch2_v: Optional[float] = None
+    ch2_i: Optional[float] = None
+    ch3_v: Optional[float] = None
+    ch3_i: Optional[float] = None
+    ch4_v: Optional[float] = None
+    ch4_i: Optional[float] = None
+
+class StreamInjectPayload(BaseModel):
+    fault_type: str = Field("normal", description="Fault mode: normal, sag, overload, outage")
+
+# Stateful circular stream buffer for 1 Hz simulator
 stream_state = {
     "voltage_V": 220.0,
     "current_A": 5.0,
     "power_W": 1100.0,
-    "fault_mode": "normal"
+    "fault_mode": "normal",
+    "step_count": 0
 }
 
 @app.get("/health")
@@ -100,85 +114,47 @@ def health():
     pipe = get_pipeline()
     return {
         "status": "healthy",
-        "has_stage1": pipe["stage1_model"] is not None,
-        "has_scaler": pipe["scaler"] is not None,
-        "num_cat_models": len(pipe.get("cat_models", {})),
-        "num_sev_models": len(pipe.get("sev_models", {})),
-        "threshold": pipe.get("threshold", 0.35)
+        "service": "PowerGuard AI Inference Service",
+        "operational_features_count": len(OPERATIONAL_FEATURE_COLS),
+        "stage1_loaded": pipe["stage1_model"] is not None,
+        "stage1_threshold": pipe.get("threshold", 0.125),
+        "stage2_cat_models_count": len(pipe.get("cat_models", {})),
+        "stage2_sev_models_count": len(pipe.get("sev_models", {})),
+        "stage2_cat_meta_loaded": pipe["cat_meta"] is not None,
+        "stage2_sev_meta_loaded": pipe["sev_meta"] is not None
     }
 
 @app.get("/")
 def root():
     return {
-        "message": "Solar & Grid Fault Detection API is running",
+        "name": "PowerGuard AI",
+        "description": "Solar & Electrical Fault Detection Engine",
         "docs_url": "/docs",
-        "health_url": "/health",
-        "endpoints": ["/predict/two-stage", "/stream/step", "/stream/inject"]
+        "health_url": "/health"
     }
 
-@app.get("/predict/two-stage")
-def predict_two_stage_get_info():
-    return {
-        "message": "Endpoint expects HTTP POST with JSON body",
-        "example_payload": {
-            "voltage_V": 220.0,
-            "current_A": 5.0,
-            "frequency_Hz": 50.0,
-            "power_W": 1100.0,
-            "power_factor": 0.98,
-            "thd_V": 1.2,
-            "thd_I": 2.1,
-            "phase_angle_deg": 18.0,
-            "unbalance_V": 0.5
-        }
-    }
-
-@app.post("/predict/two-stage")
-def predict_two_stage(payload: TelemetryPayload):
+def _run_cascaded_inference(df_feat: pd.DataFrame, raw_dict: dict) -> dict:
     pipe = get_pipeline()
-    
-    # 1. Feature Engineering
-    raw_dict = payload.dict()
-    df_single = pd.DataFrame([raw_dict])
-    df_feat = add_electrical_features(df_single, previous_state=stream_state)
-    
-    # Fill any missing feature columns with default zeros
-    for c in FEATURE_COLS:
-        if c not in df_feat.columns:
-            df_feat[c] = 0.0
-            
-    X_raw = df_feat[FEATURE_COLS].values.astype(np.float32)
-    
-    # Physical explainability triggers
-    shap_triggers = explain_prediction_heuristic(raw_dict)
-    
-    # Check if models are available; if not, return fallback diagnosis
     if pipe["stage1_model"] is None:
-        # Heuristic fallback if models not loaded
-        is_anom = payload.voltage_V < 20.0 or payload.voltage_V < 198.0 or payload.current_A > 15.0 or payload.power_factor < 0.70
-        return {
-            "source": "heuristic_fallback",
-            "is_anomaly": is_anom,
-            "anomaly_probability": 0.85 if is_anom else 0.05,
-            "fault_category": "Voltage Sag / Dip" if payload.voltage_V < 198.0 else ("Outage / Blackout" if payload.voltage_V < 20.0 else "Normal Baseline"),
-            "fault_severity": "Critical" if payload.voltage_V < 20.0 else ("Medium" if is_anom else "None"),
-            "shap_triggers": shap_triggers
-        }
+        raise HTTPException(status_code=503, detail="ML models are not loaded on server.")
         
-    # Real Model Inference
-    # Stage 1: Binary Filter
+    X_raw = df_feat[OPERATIONAL_FEATURE_COLS].values.astype(np.float32)
     s1_prob = float(pipe["stage1_model"].predict_proba(X_raw)[0, 1])
-    is_anomaly = s1_prob >= pipe["threshold"]
-    
+    threshold = float(pipe["threshold"])
+    is_anomaly = s1_prob >= threshold
+
     pred_category = "Normal Operation"
     pred_severity = "None"
     cat_conf = 1.0 - s1_prob
     sev_conf = 1.0 - s1_prob
     
+    cat_probs_dist = {"normal": round(1.0 - s1_prob, 4)}
+    sev_probs_dist = {"none": round(1.0 - s1_prob, 4)}
+
     if is_anomaly:
         X_scaled = pipe["scaler"].transform(X_raw).astype(np.float32) if pipe["scaler"] else X_raw
         
-        # Stage 2A: Fault Category
+        # Stage 2A: Fault Category Stacking
         if len(pipe["cat_models"]) > 0:
             cat_probs = []
             for m_key, m_info in MODEL_REGISTRY.items():
@@ -189,17 +165,19 @@ def predict_two_stage(payload: TelemetryPayload):
                     aligned_p = align_probabilities(raw_p, m.classes_, len(STAGE2_FAULT_CATEGORIES))
                     cat_probs.append(aligned_p)
             soft_vote = np.mean(cat_probs, axis=0)
+            
             if pipe["cat_meta"] is not None:
                 meta_feats = np.hstack(cat_probs + [soft_vote])
                 cat_idx = int(pipe["cat_meta"].predict(meta_feats)[0])
             else:
                 cat_idx = int(np.argmax(soft_vote[0]))
+                
             pred_category = STAGE2_FAULT_CATEGORIES[cat_idx].replace("_", " ").title()
-            cat_conf = float(np.max(soft_vote[0]))
-        else:
-            pred_category = "Electrical Anomaly"
-            
-        # Stage 2B: Fault Severity
+            cat_conf = float(soft_vote[0, cat_idx])
+            for i, cat_name in enumerate(STAGE2_FAULT_CATEGORIES):
+                cat_probs_dist[cat_name] = round(float(soft_vote[0, i]), 4)
+                
+        # Stage 2B: Fault Severity Stacking
         if len(pipe["sev_models"]) > 0:
             sev_probs = []
             for m_key, m_info in MODEL_REGISTRY.items():
@@ -210,77 +188,118 @@ def predict_two_stage(payload: TelemetryPayload):
                     aligned_p = align_probabilities(raw_p, m.classes_, len(STAGE2_FAULT_SEVERITIES))
                     sev_probs.append(aligned_p)
             soft_vote_s = np.mean(sev_probs, axis=0)
+            
             if pipe["sev_meta"] is not None:
                 meta_feats_s = np.hstack(sev_probs + [soft_vote_s])
                 sev_idx = int(pipe["sev_meta"].predict(meta_feats_s)[0])
             else:
                 sev_idx = int(np.argmax(soft_vote_s[0]))
-            pred_severity = STAGE2_FAULT_SEVERITIES[sev_idx].title()
-            sev_conf = float(np.max(soft_vote_s[0]))
-        else:
-            pred_severity = "High"
+                
+            raw_sev = STAGE2_FAULT_SEVERITIES[sev_idx]
+            pred_severity = "Medium" if raw_sev == "med" else raw_sev.title()
+            sev_conf = float(soft_vote_s[0, sev_idx])
+            for i, sev_name in enumerate(STAGE2_FAULT_SEVERITIES):
+                d_name = "medium" if sev_name == "med" else sev_name
+                sev_probs_dist[d_name] = round(float(soft_vote_s[0, i]), 4)
+
+    shap_triggers = explain_prediction_heuristic(raw_dict)
 
     return {
-        "source": "two_stage_ensemble",
         "is_anomaly": bool(is_anomaly),
         "stage1_probability": round(s1_prob, 4),
-        "stage1_threshold": float(pipe["threshold"]),
+        "stage1_threshold": threshold,
         "fault_category": pred_category,
         "category_confidence": round(cat_conf, 4),
+        "category_probabilities": cat_probs_dist,
         "fault_severity": pred_severity,
         "severity_confidence": round(sev_conf, 4),
-        "shap_triggers": shap_triggers
+        "severity_probabilities": sev_probs_dist,
+        "physics_attributions": shap_triggers
     }
 
-@app.get("/stream/inject")
-def inject_stream_fault(fault_type: str):
-    """Injects a simulated fault into the 1 Hz stream generator."""
-    stream_state["fault_mode"] = fault_type
-    return {"status": "injected", "fault_mode": fault_type}
+@app.post("/predict/two-stage")
+def predict_two_stage(payload: TelemetryPayload):
+    raw_dict = payload.dict()
+    if raw_dict.get("power_W") is None:
+        pf_val = raw_dict.get("power_factor", 0.98) or 0.98
+        raw_dict["power_W"] = round(raw_dict["voltage_V"] * raw_dict["current_A"] * pf_val, 2)
+        
+    df_single = pd.DataFrame([raw_dict])
+    df_feat = add_electrical_features(df_single, previous_state=stream_state)
+    return _run_cascaded_inference(df_feat, raw_dict)
+
+@app.post("/predict/solar-pv")
+def predict_solar_pv(payload: SolarPVPayload):
+    pv_data = payload.dict()
+    df_operational, meta = adapt_pv_telemetry(pv_data)
+    
+    if not meta["valid"]:
+        raise HTTPException(status_code=422, detail=meta["warnings"])
+        
+    raw_dict = {
+        "voltage_V": float(df_operational["voltage_V"].iloc[0]),
+        "current_A": float(df_operational["current_A"].iloc[0]),
+        "power_W": float(df_operational["power_W"].iloc[0]),
+        "frequency_Hz": float(df_operational["frequency_Hz"].iloc[0]),
+        "power_factor": float(df_operational["power_factor"].iloc[0])
+    }
+    
+    inference_result = _run_cascaded_inference(df_operational, raw_dict)
+    return {
+        "pv_dc_analytics": meta["dc_analytics"],
+        "ac_grid_diagnosis": inference_result
+    }
+
+@app.post("/stream/inject")
+def inject_fault(payload: StreamInjectPayload):
+    stream_state["fault_mode"] = payload.fault_type
+    return {"status": "success", "active_fault_mode": payload.fault_type}
 
 @app.get("/stream/step")
 def stream_step():
-    """Generates the next 1 Hz continuous telemetry reading and evaluates it through ML."""
+    stream_state["step_count"] += 1
     mode = stream_state.get("fault_mode", "normal")
     
-    # Base nominal fluctuation
-    v = 220.0 + np.random.uniform(-1.0, 1.0)
-    i = 5.0 + np.random.uniform(-0.1, 0.1)
-    f = 50.0 + np.random.uniform(-0.02, 0.02)
-    pf = 0.95 + np.random.uniform(-0.01, 0.01)
+    # 1. Base grid sinusoidal nominal
+    t = stream_state["step_count"]
+    v = 220.0 + 1.8 * np.sin(t * 0.1) + np.random.uniform(-0.5, 0.5)
+    i = 5.0 + 0.2 * np.cos(t * 0.05) + np.random.uniform(-0.1, 0.1)
+    f = 50.0 + np.random.uniform(-0.03, 0.03)
+    pf = 0.98 + np.random.uniform(-0.01, 0.01)
     
-    # Fault overrides
+    # 2. Inject fault dynamics if active
     if mode == "sag":
-        v = 184.0 + np.random.uniform(-2.0, 2.0)
+        v = 175.0 + np.random.uniform(-3.0, 3.0)
     elif mode == "overload":
-        i = 19.5 + np.random.uniform(-0.5, 0.5)
-        v = 208.0 + np.random.uniform(-2.0, 1.0)
+        i = 24.5 + np.random.uniform(-1.0, 1.0)
+        v = 205.0 + np.random.uniform(-2.0, 1.0)
     elif mode == "outage":
         v = 0.0
         i = 0.0
         pf = 0.0
         
-    p = v * i * pf
+    p = round(v * i * pf, 2)
     
-    payload = TelemetryPayload(
-        voltage_V=round(v, 2),
-        current_A=round(i, 2),
-        frequency_Hz=round(f, 2),
-        power_W=round(p, 2),
-        power_factor=round(pf, 3),
-        thd_V=1.2,
-        thd_I=2.1,
-        phase_angle_deg=18.0,
-        unbalance_V=0.5
-    )
+    telemetry = {
+        "voltage_V": round(v, 2),
+        "current_A": round(i, 2),
+        "power_W": p,
+        "frequency_Hz": round(f, 2),
+        "power_factor": round(pf, 3)
+    }
     
-    # Update state buffer
+    df_single = pd.DataFrame([telemetry])
+    df_feat = add_electrical_features(df_single, previous_state=stream_state)
+    
+    # Update rolling state
     stream_state["voltage_V"] = v
     stream_state["current_A"] = i
     stream_state["power_W"] = p
     
-    ml_result = predict_two_stage(payload)
+    diagnosis = _run_cascaded_inference(df_feat, telemetry)
+    
     return {
-        "telemetry": payload.dict(),
-        "diagnosis": ml_result
+        "timestamp_tick": stream_state["step_count"],
+        "telemetry": telemetry,
+        "diagnosis": diagnosis
     }
