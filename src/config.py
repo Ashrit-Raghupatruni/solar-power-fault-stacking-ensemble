@@ -33,7 +33,7 @@ STATION_FILES = {
     3: DATA_DIR / "station3_high_features.csv"
 }
 
-# 1. Raw physical sensor telemetry features
+# 1. Raw physical sensor telemetry features (5)
 RAW_SENSOR_FEATURES = [
     "voltage_V",
     "current_A",
@@ -42,43 +42,26 @@ RAW_SENSOR_FEATURES = [
     "power_factor"
 ]
 
-# 2. Edge precomputed non-linear & statistical features
-EDGE_FEATURES = [
-    "PE_m3",
-    "PE_m4",
-    "PE_m5",
-    "WPE",
-    "MSPE",
-    "CV",
-    "delta_PF",
-    "SII"
-]
-
-# 3. Upgraded Domain Electrical, Dynamic & Rolling Volatility Features
+# 2. Domain Electrical, Causal Derivatives & Rolling Volatility Features (11)
 ENGINEERED_FEATURES = [
     "apparent_power_VA",
     "reactive_power_var",
     "power_active_apparent_ratio",
     "voltage_deviation_pct",
     "frequency_deviation_pct",
-    "current_per_watt",
-    # Dynamic transient & rate-of-change indicators
     "d_voltage_dt",
     "d_current_dt",
     "d_power_dt",
-    "power_factor_stability",
-    "impedance_proxy_ohm",
-    # Rolling volatility & station-invariant baseline ratio
     "rolling_std_v5",
     "rolling_std_i5",
-    "rolling_std_p5",
     "power_to_baseline_ratio"
 ]
 
-# Operational Features: Guaranteed to be present identically in training, batch testing, and 1 Hz streaming inference
+# Unified 16 Operational Features:
+# Strictly identical across offline 1.81M dataset, batch validation, API inference, and 1 Hz live streaming
 OPERATIONAL_FEATURE_COLS = RAW_SENSOR_FEATURES + ENGINEERED_FEATURES
 
-# Full Feature Columns (including offline edge statistics when available)
+# The official feature column list for all models
 FEATURE_COLS = OPERATIONAL_FEATURE_COLS
 
 # Target definitions
@@ -86,7 +69,7 @@ TARGET_CATEGORY = "fault_category"
 TARGET_SEVERITY = "severity"
 TARGET_BINARY = "anomaly"
 
-# 8 Controlled Anomalies Exclusively for Stage 2 Multi-Class Identification
+# 8 Controlled Anomalies Exclusively for Stage 2 Multi-Class Category Identification
 STAGE2_FAULT_CATEGORIES = [
     "voltage",
     "load",
@@ -98,10 +81,12 @@ STAGE2_FAULT_CATEGORIES = [
     "compound"
 ]
 
+# 5 Controlled Anomalies Exclusively for Stage 2 Multi-Class Severity Identification
+# Ground truth benchmark uses 'med'
 STAGE2_FAULT_SEVERITIES = [
     "incipient",
     "low",
-    "medium",
+    "med",
     "high",
     "critical"
 ]
@@ -119,23 +104,23 @@ CATEGORY_LABELS = [
     "compound"
 ]
 
-# 6 Severity grades (Including None for flat pipelines)
+# 6 Severity grades (Including None for flat pipelines) - Benchmark ground truth uses 'med'
 SEVERITY_LABELS = [
     "none",
     "incipient",
     "low",
-    "medium",
+    "med",
     "high",
     "critical"
 ]
 
-# Raw CSV to canonical mapping dictionary
+# Raw CSV to canonical mapping dictionary (maps both 'med' and 'medium' to 'med')
 RAW_SEVERITY_MAP = {
     "none": "none",
     "incipient": "incipient",
     "low": "low",
-    "med": "medium",
-    "medium": "medium",
+    "med": "med",
+    "medium": "med",
     "high": "high",
     "critical": "critical"
 }

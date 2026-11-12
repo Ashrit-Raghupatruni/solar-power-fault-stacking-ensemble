@@ -70,18 +70,20 @@ def add_electrical_features(df: pd.DataFrame, previous_state: dict = None) -> pd
         df["d_power_dt"] = df.groupby(group_keys)["power_W"].diff().fillna(0.0).abs().round(4)
         
         # 5-second Rolling standard deviations (volatility) - strictly preserve DataFrame row indices
+        n_levels = len(group_keys)
         rolling_v = df.groupby(group_keys)["voltage_V"].rolling(window=5, min_periods=1).std()
-        df["rolling_std_v5"] = rolling_v.droplevel(0).sort_index().fillna(0.0).round(4)
+        df["rolling_std_v5"] = rolling_v.reset_index(level=list(range(n_levels)), drop=True).sort_index().fillna(0.0).round(4)
         
         rolling_i = df.groupby(group_keys)["current_A"].rolling(window=5, min_periods=1).std()
-        df["rolling_std_i5"] = rolling_i.droplevel(0).sort_index().fillna(0.0).round(4)
+        df["rolling_std_i5"] = rolling_i.reset_index(level=list(range(n_levels)), drop=True).sort_index().fillna(0.0).round(4)
         
         rolling_p = df.groupby(group_keys)["power_W"].rolling(window=5, min_periods=1).std()
-        df["rolling_std_p5"] = rolling_p.droplevel(0).sort_index().fillna(0.0).round(4)
+        df["rolling_std_p5"] = rolling_p.reset_index(level=list(range(n_levels)), drop=True).sort_index().fillna(0.0).round(4)
         
         # Station-Invariant Moving Baseline Ratio: P / (mean P over 30 seconds)
-        rolling_mean_p = df.groupby(group_keys)["power_W"].rolling(window=30, min_periods=1).mean().droplevel(0).sort_index().replace(0.0, np.nan)
-        df["power_to_baseline_ratio"] = (df["power_W"].abs() / rolling_mean_p.abs()).fillna(1.0).clip(0.0, 10.0).round(4)
+        rolling_mean_p = df.groupby(group_keys)["power_W"].rolling(window=30, min_periods=1).mean()
+        aligned_mean_p = rolling_mean_p.reset_index(level=list(range(n_levels)), drop=True).sort_index().replace(0.0, np.nan)
+        df["power_to_baseline_ratio"] = (df["power_W"].abs() / aligned_mean_p.abs()).fillna(1.0).clip(0.0, 10.0).round(4)
 
     elif previous_state is not None and len(df) == 1:
         # Single-sample online inference in Dashboard

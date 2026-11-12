@@ -61,17 +61,23 @@ def train_stage1_binary_detector():
     print(f"Train samples: {len(X_train):,} (Anomalies: {y_train.sum():,})")
     print(f"Test samples:  {len(X_test):,} (Anomalies: {y_test.sum():,})")
     
-    # Train high-recall HistGradientBoosting with class_weight='balanced'
+    # Critical Safety Weighting: Apply 5x sample weight to critical faults in Stage 1
+    # This prevents the binary detector from discarding dangerous events as normal baseline
+    sample_weights_tr = np.ones(len(y_train), dtype=np.float32)
+    crit_mask = (train_df["severity"] == "critical").values
+    sample_weights_tr[crit_mask] = 5.0
+
+    # Train high-recall HistGradientBoosting with class_weight='balanced' and safety sample weights
     start_t = time.time()
     binary_detector = HistGradientBoostingClassifier(
         max_iter=150, max_depth=10, min_samples_leaf=30,
         class_weight="balanced", random_state=RANDOM_STATE
     )
-    binary_detector.fit(X_train, y_train)
+    binary_detector.fit(X_train, y_train, sample_weight=sample_weights_tr)
     fit_time = time.time() - start_t
     
     # Threshold Search on an internal validation split of the training set
-    print("\n--- Running Stage 1 Validation-Driven Threshold Search ---")
+    print("\n--- Running Stage 1 Safety-Oriented Threshold Search (Expanded tau in [0.05, 0.50]) ---")
     sgkf_val = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
     train_sub_idx, val_sub_idx = next(sgkf_val.split(X_train, y_train, train_df["group_id"].values))
     
@@ -79,28 +85,32 @@ def train_stage1_binary_detector():
         max_iter=150, max_depth=10, min_samples_leaf=30,
         class_weight="balanced", random_state=RANDOM_STATE
     )
-    val_model.fit(X_train[train_sub_idx], y_train[train_sub_idx])
+    val_model.fit(X_train[train_sub_idx], y_train[train_sub_idx], sample_weight=sample_weights_tr[train_sub_idx])
     val_probs = val_model.predict_proba(X_train[val_sub_idx])[:, 1]
     
-    candidate_thresholds = np.linspace(0.15, 0.70, 12)
-    best_threshold = 0.35
+    val_crit_mask = (train_df["severity"].iloc[val_sub_idx] == "critical").values
+    candidate_thresholds = np.linspace(0.05, 0.50, 19)
+    best_threshold = 0.20
     best_f1 = 0.0
     
-    print(f"  {'Threshold':<10} | {'Recall':<8} | {'Precision':<10} | {'F1-Score':<10} | {'FNR':<8}")
-    print("  " + "-"*55)
+    print(f"  {'Threshold':<10} | {'Recall':<8} | {'Crit Recall':<12} | {'Precision':<10} | {'F1-Score':<10} | {'FNR':<8}")
+    print("  " + "-"*75)
     for th in candidate_thresholds:
         v_preds = (val_probs >= th).astype(int)
         v_rec = recall_score(y_train[val_sub_idx], v_preds, zero_division=0)
+        v_crit_rec = recall_score(y_train[val_sub_idx][val_crit_mask], v_preds[val_crit_mask], zero_division=0) if np.sum(val_crit_mask) > 0 else 1.0
         v_prec = precision_score(y_train[val_sub_idx], v_preds, zero_division=0)
         v_f1 = f1_score(y_train[val_sub_idx], v_preds, zero_division=0)
         v_fnr = 1.0 - v_rec
-        print(f"  {th:<10.2f} | {v_rec*100:<7.2f}% | {v_prec*100:<9.2f}% | {v_f1*100:<9.2f}% | {v_fnr*100:<7.2f}%")
-        # Optimization policy: Require >= 95% Recall, then maximize F1
-        if v_rec >= 0.95 and v_f1 > best_f1:
-            best_f1 = v_f1
-            best_threshold = float(th)
+        print(f"  {th:<10.2f} | {v_rec*100:<7.2f}% | {v_crit_rec*100:<11.2f}% | {v_prec*100:<9.2f}% | {v_f1*100:<9.2f}% | {v_fnr*100:<7.2f}%")
+        
+        # Policy: Critical Recall must be >= 95%, then maximize general F1
+        if v_crit_rec >= 0.95 and v_rec >= 0.85:
+            if v_f1 > best_f1:
+                best_f1 = v_f1
+                best_threshold = float(th)
 
-    print(f"\nOptimal Stage 1 Validation Threshold Selected: {best_threshold:.2f} (Recall >= 95%, F1={best_f1*100:.2f}%)")
+    print(f"\nOptimal Stage 1 Validation Threshold Selected: {best_threshold:.2f} (Crit Recall >= 95%, F1={best_f1*100:.2f}%)")
 
     # Evaluate Stage 1 on untouched held-out test partition
     test_probs = binary_detector.predict_proba(X_test)[:, 1]
@@ -151,6 +161,10 @@ def train_stage2_multiclass_pipeline(target_type: str = "category"):
         n_classes = len(STAGE2_CAT_TO_IDX)
         model_subfolder = "stage2_fault_category"
     else:
+        # Standardize severity: map legacy 'medium' to canonical 'med'
+        train_anom["severity"] = train_anom["severity"].replace({"medium": "med"})
+        test_anom["severity"] = test_anom["severity"].replace({"medium": "med"})
+        
         # Standardize severity with explicit validation
         unmapped_train = train_anom["severity"][~train_anom["severity"].isin(STAGE2_SEV_TO_IDX.keys())].unique()
         unmapped_test = test_anom["severity"][~test_anom["severity"].isin(STAGE2_SEV_TO_IDX.keys())].unique()
@@ -177,7 +191,16 @@ def train_stage2_multiclass_pipeline(target_type: str = "category"):
     
     print(f"Stage 2 Train Anomalies: {len(X_train_raw):,} | Test Anomalies: {len(X_test_raw):,} | Classes: {n_classes}")
     
+    # Class-weighting & Safety-penalty for Critical Severity
     num_models = len(MODEL_REGISTRY)
+    class_weights_s2 = "balanced"
+    if target_type == "severity":
+        # Critical severity is at STAGE2_SEV_TO_IDX["critical"]
+        crit_idx = STAGE2_SEV_TO_IDX["critical"]
+        # Apply 5x safety penalty multiplier on critical class in Logistic Regression meta-learner
+        meta_class_weight = {0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, crit_idx: 5.0}
+    else:
+        meta_class_weight = "balanced"
     # Meta features: base models predictions + Soft Voting consensus (1 extra block)
     oof_meta_features = np.zeros((len(X_train_raw), (num_models + 1) * n_classes), dtype=np.float32)
     test_meta_features = np.zeros((len(X_test_raw), (num_models + 1) * n_classes), dtype=np.float32)
@@ -251,7 +274,7 @@ def train_stage2_multiclass_pipeline(target_type: str = "category"):
     
     # 3. Residual Stacking Meta-Learner Training
     print("\n--- Training Residual Stacking Meta-Learner (Logistic Regression L2) ---")
-    meta_learner = LogisticRegression(C=0.5, penalty="l2", class_weight="balanced", max_iter=2000, random_state=RANDOM_STATE)
+    meta_learner = LogisticRegression(C=0.5, penalty="l2", class_weight=meta_class_weight, max_iter=2000, random_state=RANDOM_STATE)
     meta_learner.fit(oof_meta_features, y_train)
     
     stack_preds = meta_learner.predict(test_meta_features)

@@ -84,10 +84,10 @@ def evaluate_cascaded_system():
     X_raw = test_df[FEATURE_COLS].values.astype(np.float32)
     X_scaled = scaler.transform(X_raw).astype(np.float32)
     
-    # Ground truth
+    # Ground truth (standardize 'medium' -> 'med')
     y_true_binary = (test_df["anomaly"] == 1).astype(int).values
     y_true_cat_raw = test_df["fault_category"].values
-    y_true_sev_raw = test_df["severity"].values
+    y_true_sev_raw = test_df["severity"].replace({"medium": "med"}).values
     
     # ----------------------------------------------------
     # Step 1: Stage 1 Binary Inference
