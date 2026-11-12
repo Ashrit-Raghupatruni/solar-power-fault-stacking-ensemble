@@ -1,167 +1,239 @@
-# Solar & Electrical Power System Fault and Anomaly Detection Using Stacking Ensemble Learning
+# PowerGuard AI: Solar & Electrical Power System Fault and Anomaly Detection Using Stacking Ensemble Learning
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: CC BY 4.0](https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 [![Dataset: Zenodo 20565892](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20565892-blue)](https://doi.org/10.5281/zenodo.20565892)
 [![Branch: advance](https://img.shields.io/badge/branch-advance-success.svg)](https://github.com/Ashrit-Raghupatruni/solar-power-fault-stacking-ensemble/tree/advance)
+[![Architecture: Two--Stage Cascaded](https://img.shields.io/badge/Architecture-Two--Stage%20Cascaded%20Stacking-orange.svg)](#-two-stage-cascaded-ml-architecture)
 
-An end-to-end Machine Learning system for real-time electrical fault detection, severity estimation, and Photovoltaic (PV) inverter telemetry diagnosis using **Residual Stacking Ensemble Learning** and **Two-Stage Cascaded Detection** evaluated on the **full 1.81 Million record benchmark**.
-
----
-
-## 📌 Project Overview
-Solar energy systems and electrical grids experience abnormal operating conditions due to component degradation, unexpected load surges, inverter phase clipping, and harmonic distortion. 
-This project builds an intelligent anomaly detection system using the **Zenodo Controlled-Fault Power Benchmark (1,814,400 per-second records across 3 monitoring stations)**.
-
-### Key Technical Contributions & Architecture Upgrades
-1. **Full-Scale 1.81 Million Data Points Pipeline**:
-   - Ingests all 3 physical monitoring stations without downsampling:
-     - **Station 1**: 604,800 rows (Laboratory baseline)
-     - **Station 2**: 604,800 rows (Residential medium load)
-     - **Station 3**: 604,800 rows (Industrial high inductive load)
-   - Employs memory-efficient `float32` and `int8` downcasting (cutting RAM footprint from 2.2 GB to ~214 MB).
-2. **Zero Data & Boundary Leakage Protocol**:
-   - Implements **`StratifiedGroupKFold`** on `(station_id, event_id)` and 20-minute contiguous normal temporal blocks.
-   - **Zero event overlap**: Train partition has **1,465,501 samples (203 unique events)**; Held-out test partition has **348,899 samples (51 unique events)**.
-   - Scalers and imputers are strictly fitted on training splits, preventing validation fold contamination.
-3. **Two-Stage Hierarchical Cascaded Classification**:
-   - **Stage 1 (Binary Anomaly Filter)**: High-recall detector (`HistGradientBoostingClassifier`, balanced class weights, tuned threshold $\tau = 0.35$) filtering nominal vs. anomalous operations with $>95\%$ recall.
-   - **Stage 2 (Specialized Fault Classifiers)**: Multi-class category (8 fault types) and severity (5 fault grades) models trained exclusively on anomalous events, removing the 98.3% normal class dilution that previously degraded multi-class classifiers.
-4. **Residual Stacking Ensemble Architecture**:
-   - Combines 5 base classifiers: HistGradientBoosting, Random Forest, Extra Trees, Linear SGD Classifier (Log Loss), and K-Nearest Neighbors.
-   - **Residual Stacking Design**: Concatenates consensus Soft-Voting probability vectors alongside base model probabilities into an $L_2$-regularized Logistic Regression meta-learner. By including the consensus probability baseline directly in the meta-feature space, this provides strong inductive regularization to guard against meta-learner underfitting on extreme class imbalances.
-5. **Boundary-Safe Dynamic & Rolling Feature Engineering**:
-   - Static AC metrics: Apparent Power ($S = |V| \cdot |I|$), Reactive Power ($Q = \sqrt{S^2 - P^2}$), Power Distortion Ratio.
-   - Boundary-safe temporal derivatives ($\frac{dV}{dt}, \frac{dI}{dt}, \frac{dP}{dt}$) strictly partitioned by collision-free group IDs to eliminate cross-event and normal-chunk boundary leakage.
-   - 5-second dynamic rolling standard deviations (`rolling_std_v5`, `rolling_std_i5`, `rolling_std_p5`) and station-invariant normalized power ratio ($P / \bar{P}_{30s}$).
-   - Stateful single-sample circular buffer supporting streaming online inference without synthetic padding.
-6. **Physics-Guided Attribution & Explainability**:
-   - Fast heuristic physical diagnostic engine attributing anomalous predictions to dynamic deviations in electrical parameters (e.g. voltage sag severity, inrush current spikes, phase distortion).
-7. **Production FastAPI Service & Interactive Web Dashboard**:
-   - **FastAPI Prediction Backend** (`app/api.py`): Serves real two-stage ML inference, thresholding, and live 1 Hz stream generation via RESTful endpoints.
-   - **Interactive Web Dashboard** (`app/dashboard_server.py`): Zero-dependency dashboard connected live to the FastAPI backend.
-     - **Tab 1: Two-Stage Hierarchical Diagnosis**: Multi-stage classification breakdown with physical diagnostic cards.
-     - **Tab 2: Interactive 1 Hz Live Grid Stream Simulator**: Real-time 1,000 ms telemetry feed and live HTML5 canvas waveform animation with fault injection (Voltage Sag, Inverter Overload, System Outage).
-     - **Tab 3: Solar PV Telemetry Adapter**: Real-time AC/DC string parameter transformation ($S = V \cdot I, Q = \sqrt{S^2 - P^2}$).
-     - **Tab 4: Benchmark Model Explorer**: Embedded evaluation metrics and confusion matrices.
+An end-to-end industrial-grade Machine Learning and telemetry diagnostics platform for real-time electrical fault detection, severity estimation, and Photovoltaic (PV) microinverter monitoring. Powered by a **Two-Stage Cascaded Detection Architecture**, a **Residual Stacking Ensemble**, and an **AhoyDTU / OpenDTU Solar Telemetry Adapter**, evaluated across the complete **1.81 Million record Zenodo benchmark**.
 
 ---
 
-## 📊 Evaluation Benchmarks on Full 1.81M Dataset
+## 📌 Key System Highlights
 
-### 1. Fault Category Classification (9 Classes, 348,899 Test Records)
-
-| Rank | Model Architecture | Accuracy (%) | Macro-F1 (%) | Macro-Precision (%) | Macro-Recall (%) |
-| :---: | :--- | :---: | :---: | :---: | :---: |
-| 🥇 **1** | **Soft Voting Ensemble** | **94.42%** | **58.27%** | 49.99% | **90.81%** 🏆 |
-| 🥈 **2** | **Residual Stacking (Advance)** | **94.75%** | **58.60%** | **51.20%** | **91.10%** |
-| 🥉 **3** | **Standard Stacking (Baseline)** | 94.68% | 46.96% | 44.60% | 55.41% |
-| 4 | **Random Forest** | 85.53% | 41.75% | 39.14% | 58.44% |
-| 5 | **Gradient Boosting** | 86.48% | 39.62% | 33.09% | 94.22% |
-| 6 | **Support Vector Machine (Linear RBF)** | 97.88% | 37.26% | 49.01% | 39.00% |
-| 7 | **Extra Trees** | 66.43% | 36.43% | 35.63% | 62.46% |
-| 8 | **K-Nearest Neighbors** | 84.29% | 34.52% | 29.10% | 83.13% |
-
-### 2. Fault Severity Classification (6 Grades, 348,899 Test Records)
-
-| Rank | Model Architecture | Accuracy (%) | Macro-F1 (%) | Macro-Precision (%) | Macro-Recall (%) |
-| :---: | :--- | :---: | :---: | :---: | :---: |
-| 🥇 **1** | **Residual Stacking (Advance)** | **95.60%** | **54.10%** | **45.20%** | **82.30%** 🏆 |
-| 🥈 **2** | **Soft Voting Ensemble** | 95.44% | 53.32% | 43.99% | 81.19% |
-| 🥉 **3** | **Gradient Boosting** | 81.83% | 35.76% | 29.48% | 87.20% |
-| 4 | **K-Nearest Neighbors** | 83.86% | 29.70% | 25.12% | 82.07% |
-| 5 | **Support Vector Machine** | 97.88% | 29.44% | 49.92% | 26.92% |
-| 6 | **Random Forest** | 95.27% | 27.60% | 26.65% | 30.56% |
-| 7 | **Extra Trees** | 82.68% | 19.71% | 19.32% | 34.95% |
-| 8 | **Standard Stacking (Baseline)** | 86.48% | 16.44% | 17.13% | 18.97% |
+1. **Full-Scale 1.81M Record Controlled-Fault Benchmark**:
+   - Ingests all 3 physical monitoring stations without downsampling (1,814,400 per-second records):
+     - **Station 1 (Laboratory Baseline)**: 604,800 seconds (~661 W, 92 fault events).
+     - **Station 2 (Residential Profile)**: 604,800 seconds (~685 W, 84 fault events).
+     - **Station 3 (Industrial High Inductive Load)**: 604,800 seconds (~4,255 W, 78 fault events).
+2. **Standardized Severity Taxonomy & Leakage-Free Splitting**:
+   - Severity taxonomy harmonized to raw Zenodo benchmark ground truth: `['none', 'incipient', 'low', 'med', 'high', 'critical']`.
+   - Partitioned via `StratifiedGroupKFold` on `(station_id, event_id)` with contiguous temporal block preservation: **Zero event overlap** (Train: 1,465,501 rows, 203 events; Holdout Test: 348,899 rows, 51 events).
+3. **Unified 16-Feature Operational Schema**:
+   - Standardized feature vector matching runtime IoT and inverter measurement capabilities without artificial constants or unobservable frequency-domain entropy features.
+4. **Safety-Weighted Two-Stage Cascaded Architecture**:
+   - **Stage 1 (Binary Anomaly Detector)**: Class-weighted `HistGradientBoostingClassifier` with $5\times$ penalty on critical events and tuned decision threshold ($\tau = 0.125$), achieving **94.95% overall anomaly recall** and **99.24% critical fault recall**.
+   - **Stage 2 (Residual Stacking Classifiers)**: Isolated multi-class classifiers for **Fault Category (8 classes)** and **Severity Grade (5 classes)** trained exclusively on anomalous events to eliminate normal-class dilution.
+5. **AhoyDTU / OpenDTU Solar PV Inverter Adapter**:
+   - Ingests 4-channel DC string telemetry ($V_{\text{dc}}, I_{\text{dc}}, P_{\text{dc}}$) alongside AC grid-tie readings ($V_{\text{ac}}, I_{\text{ac}}, P_{\text{ac}}, f, \text{PF}$).
+   - Computes solar conversion efficiency $\eta = \frac{P_{\text{ac}}}{\sum P_{\text{dc}}} \times 100$ and keeps DC string parameters strictly isolated to PV health analytics without corrupting the AC classifier.
+6. **Production FastAPI Inference Service & 8-Section SCADA Dashboard**:
+   - **FastAPI Backend** (`app/api.py`): Real-time inference endpoints, health inspection, and live 1 Hz stream generator with fault injection.
+   - **SCADA Web Dashboard** (`app/dashboard_server.py`): Industrial dark UI featuring 8 specialized sections with live canvas waveforms and zero-flicker telemetry updates.
 
 ---
 
-## 🗂 Project Directory Structure
-```text
-ML/
-├── Database/
-│   └── controlled-fault-benchmark-v1.0/   # Raw Zenodo benchmark CSVs (1.81M samples)
-├── data/
-│   ├── raw/
-│   └── processed/                         # train.csv and test.csv partitions
-├── models/
-│   ├── fault_category/                    # Category base & stacking models
-│   ├── fault_severity/                    # Severity base & stacking models
-│   ├── stage1_binary/                     # Stage 1 binary anomaly detector
-│   ├── stage2_fault_category/             # Stage 2 fault type classifiers
-│   ├── stage2_fault_severity/             # Stage 2 fault severity classifiers
-│   └── preprocessors/                     # Fitted RobustScaler artifact
-├── notebooks/
-│   ├── 01_eda.ipynb                       # Exploratory Data Analysis & visual profiling
-│   ├── 02_preprocessing_and_splitting.ipynb# Scaler comparisons & leakage verification
-│   ├── 03_model_training_and_stacking.ipynb# Manual training & stacking evaluation
-│   ├── colab_kaggle_quickstart.py         # 1-click cloud training script
-│   └── run_1_8m_full_dataset.md           # Instructions for full 1.81M execution
-├── reports/
-│   ├── dataset_profile.md                 # 29-column schema & 16-to-9 taxonomy mapping
-│   ├── full_1_8m_training_report.md       # Complete 1.81M training logs & benchmarks
-│   ├── figures/                           # Normalized confusion matrices & comparison plots
-│   └── metrics/                           # Exported CSV evaluation tables
-├── app/
-│   ├── dashboard_server.py                # Interactive dashboard & live stream simulator
-│   └── streamlit_app.py                   # Streamlit dashboard
-├── src/
-│   ├── config.py                          # Feature definitions, paths, and taxonomies
-│   ├── data_loader.py                     # Safe dataset loader and integrity verification
-│   ├── feature_engineering.py             # Boundary-safe derivatives, rolling stats & stateful buffer
-│   ├── explainability.py                  # Physics-guided diagnostic attribution engine
-│   ├── model_registry.py                  # Canonical registry for model files & requirements
-│   ├── pv_adapter.py                      # Solar Photovoltaic Inverter Adapter
-│   ├── preprocessing.py                   # Curated dataset preprocessing pipeline
-│   ├── preprocessing_full_1_8m.py         # Full 1.81M dataset loader & leakage-free splitter
-│   ├── train.py                           # Baseline base models & stacking ensemble trainer
-│   ├── train_full_1_8m.py                 # Full 1.81M standard trainer
-│   ├── train_two_stage.py                 # Two-stage cascaded & residual stacking trainer
-│   └── evaluate.py                        # Model evaluator, confusion matrices & metrics generator
-├── requirements.txt
-└── README.md
+## ⚡ Unified 16-Feature Operational Schema
+
+Every physical telemetry sample (from smart meters or PV inverters) is transformed into this standardized 16-feature vector:
+
+| # | Feature Column | Physical Description | Unit |
+|---|----------------|----------------------|------|
+| 1 | `voltage_V` | AC RMS Line Voltage | $\text{V}$ |
+| 2 | `current_A` | AC RMS Line Current | $\text{A}$ |
+| 3 | `power_W` | Active Real Power | $\text{W}$ |
+| 4 | `frequency_Hz` | Supply Grid Frequency | $\text{Hz}$ |
+| 5 | `power_factor` | Displacement Power Factor ($\cos \varphi$) | ratio [0, 1] |
+| 6 | `apparent_power_VA` | Total Apparent Power ($S = \|V\| \times \|I\|$) | $\text{VA}$ |
+| 7 | `reactive_power_var` | Reactive Power ($Q = \sqrt{\max(0, S^2 - P^2)}$) | $\text{VAR}$ |
+| 8 | `power_active_apparent_ratio` | Active-to-Apparent Power Ratio ($\frac{\|P\|}{S}$) | ratio [0, 1] |
+| 9 | `voltage_deviation_pct` | Voltage Deviation from Nominal ($\frac{V - 220}{220} \times 100$) | $\%$ |
+| 10 | `frequency_deviation_pct` | Frequency Deviation from Nominal ($\frac{f - 50}{50} \times 100$) | $\%$ |
+| 11 | `d_voltage_dt` | Causal First Derivative of Voltage ($\|V_t - V_{t-1}\|$) | $\text{V/s}$ |
+| 12 | `d_current_dt` | Causal First Derivative of Current ($\|I_t - I_{t-1}\|$) | $\text{A/s}$ |
+| 13 | `d_power_dt` | Causal First Derivative of Power ($\|P_t - P_{t-1}\|$) | $\text{W/s}$ |
+| 14 | `rolling_std_v5` | 5-Second Moving Voltage Standard Deviation | $\text{V}$ |
+| 15 | `rolling_std_i5` | 5-Second Moving Current Standard Deviation | $\text{A}$ |
+| 16 | `power_to_baseline_ratio` | Station-Invariant Power Ratio ($\frac{P_t}{P_{30s}}$) | ratio |
+
+---
+
+## 🏗 Two-Stage Cascaded ML Architecture
+
+```
+                                  Live Telemetry Input
+                       (Manual Sensor or AhoyDTU / OpenDTU Solar PV)
+                                          │
+                                          ▼
+                       ┌─────────────────────────────────────┐
+                       │   Unified 16-Feature Extraction    │
+                       │   & RobustScaler Normalization      │
+                       └──────────────────┬──────────────────┘
+                                          │
+                                          ▼
+                         STAGE 1: Binary Anomaly Filter
+                       (HistGradientBoosting, τ = 0.125)
+                                          │
+                    ┌─────────────────────┴─────────────────────┐
+                    ▼                                           ▼
+            Prob < 0.125                                Prob >= 0.125
+            [ NORMAL ]                                  [ ANOMALOUS ]
+     (Severity: None, Conf > 90%)                               │
+                                                                ▼
+                                                 STAGE 2: Residual Stacking
+                                                 ┌──────────────────────────────┐
+                                                 │ 5 Base Classifiers:          │
+                                                 │  1. Hist Gradient Boosting   │
+                                                 │  2. Random Forest (120 tr)   │
+                                                 │  3. Extra Trees (120 tr)     │
+                                                 │  4. Linear SGD (Log Loss)    │
+                                                 │  5. K-Nearest Neighbors      │
+                                                 │             │                │
+                                                 │  5-Fold OOF Meta-Features    │
+                                                 │  + Soft Voting Consensus     │
+                                                 │             │                │
+                                                 │ Level 1 Meta-Learner:        │
+                                                 │  Logistic Regression (L2)    │
+                                                 └──────────────┬───────────────┘
+                                                                │
+                                        ┌───────────────────────┴───────────────────────┐
+                                        ▼                                               ▼
+                             Stage 2A: Fault Category                         Stage 2B: Severity Grade
+                           (8 Controlled Fault Classes)                      (5 Controlled Severity Grades)
+                             • voltage         • outage                         • incipient     • med
+                             • load            • sensor                         • low           • high
+                             • frequency       • context                                        • critical
+                             • power_quality   • compound
 ```
 
 ---
 
-## 🚀 How to Run the Project
+## ☀️ AhoyDTU / OpenDTU Solar Inverter Telemetry
 
-### 1. Installation
-Clone the repository, switch to the `advance` branch, and install requirements:
-```bash
+The platform natively supports microinverters (e.g., Hoymiles HM-1200 via AhoyDTU or OpenDTU).
+
+```
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                      AhoyDTU Microinverter Interface                   │
+ ├────────────────────────────────────┬───────────────────────────────────┤
+ │ AC Grid-Tie Output Parameters      │ Multi-Channel DC String Telemetry │
+ │   • AC Voltage:     235.8 V        │   • Channel 1: 27.1 V | 0.12 A    │
+ │   • AC Current:     0.05 A         │   • Channel 2: 27.1 V | 0.13 A    │
+ │   • Active Power:   12.5 W         │   • Channel 3: 26.1 V | 0.12 A    │
+ │   • Reactive Power: 19.6 VAR       │   • Channel 4: 26.1 V | 0.12 A    │
+ │   • Power Factor:   0.54           │   • Total DC Array: 13.03 W       │
+ │   • Frequency:      49.99 Hz       │   • Efficiency η:   95.93%        │
+ └─────────────────┬──────────────────┴───────────────────────────────────┘
+                   │
+                   ▼
+  Mapped into Unified 16-Feature Schema ──► Evaluated by Pure ML Two-Stage Pipeline
+```
+
+---
+
+## 🖥 8-Section SCADA Monitoring Dashboard
+
+PowerGuard AI provides an industrial dark SCADA interface (`app/dashboard_server.py`) organized into 8 sections:
+
+| # | Section | Description |
+|---|---------|-------------|
+| **01** | **Overview** | System KPIs, 1.81M Zenodo benchmark statistics, fault distribution charts. |
+| **02** | **Live Monitoring** | Real-time 1 Hz telemetry waveforms with live fault injection (`Nominal`, `Voltage Sag`, `Overload`, `Outage`). |
+| **03** | **Fault Diagnosis** | Manual telemetry testing, Stage 1 anomaly probability gauge, Stage 2 category & severity probabilities, and physics attribution. |
+| **04** | **Stacking Ensemble** | Interactive SVG architecture diagram of Level 0 base learners, 5-fold OOF predictions, Level 1 meta-learner, and Soft Voting comparison. |
+| **05** | **Solar PV Monitoring** | Dedicated AhoyDTU / OpenDTU 4-channel DC string monitoring, yield tracking, and conversion efficiency gauge. |
+| **06** | **Model Evaluation** | Normalized 9x9 fault category and 6x6 severity confusion matrices with precision/recall metrics. |
+| **07** | **Dataset Analytics** | Comprehensive breakdown across Laboratory (604.8k), Residential (604.8k), and Industrial (604.8k) recording stations. |
+| **08** | **System & API** | FastAPI live connection status, active model weights, hashes, and 16-feature operational schema inspector. |
+
+---
+
+## 🚀 Quickstart Guide
+
+### 1. Installation & Environment Setup
+```powershell
+# Clone the repository and switch to the advance branch
 git clone https://github.com/Ashrit-Raghupatruni/solar-power-fault-stacking-ensemble.git
 cd solar-power-fault-stacking-ensemble
 git checkout advance
+
+# Install required Python packages
 pip install -r requirements.txt
 ```
 
-### 2. Run Preprocessing on Full 1.81M Records
-```bash
-python -m src.preprocessing_full_1_8m
+### 2. Run Verification Unit Tests
+```powershell
+pytest tests/test_features.py -v
 ```
 
-### 3. Model Training
-#### Option A: Advanced Two-Stage & Residual Stacking (Recommended)
-```bash
-python -m src.train_two_stage
+### 3. Start the FastAPI Real-Time ML Service (Terminal 1)
+```powershell
+uvicorn app.api:app --host 0.0.0.0 --port 8000
 ```
-#### Option B: Standard Full-Scale Training
-```bash
-python -m src.train_full_1_8m
-```
+- Interactive Swagger docs: `http://localhost:8000/docs`
+- Health & Schema status: `http://localhost:8000/health`
 
-### 4. Evaluate Models & Generate Figures
-```bash
-python -m src.evaluate
-```
-
-### 5. Launch the Interactive Dashboard & Stream Simulator
-```bash
+### 4. Start the SCADA Web Dashboard (Terminal 2)
+```powershell
 python app/dashboard_server.py
 ```
-Open **`http://localhost:8501`** in your browser to access:
-- **Tab 1: Two-Stage Hierarchical Diagnosis** (Instant fault classification with physics-guided attribution).
-- **Tab 2: 1 Hz Live Grid Stream Simulator** (Real-time telemetry waveform with interactive fault injection).
-- **Tab 3: Solar PV Telemetry Adapter** (Solar PV string and inverter conversion).
-- **Tab 4: Benchmark Explorer** (Model metrics and normalized confusion matrices).
+Open **`http://localhost:8501`** in your browser.
+
+---
+
+## 📡 API Endpoints Reference
+
+### 1. Two-Stage Fault Diagnosis (`POST /predict/two-stage`)
+**Request Body**:
+```json
+{
+  "voltage_V": 178.0,
+  "current_A": 4.5,
+  "power_W": 760.0,
+  "frequency_Hz": 50.0,
+  "power_factor": 0.95
+}
+```
+**Response**:
+```json
+{
+  "is_anomaly": true,
+  "stage1_probability": 0.924,
+  "decision_threshold": 0.125,
+  "fault_category": "voltage",
+  "category_probability": 0.887,
+  "severity": "High",
+  "severity_code": "high",
+  "severity_probability": 0.854,
+  "physics_attribution": {
+    "voltage_sag": true,
+    "current_overload": false,
+    "frequency_drift": false,
+    "poor_power_factor": false,
+    "power_deviation": true
+  }
+}
+```
+
+### 2. Solar PV Telemetry Diagnosis (`POST /predict/solar-pv`)
+**Request Body**:
+```json
+{
+  "voltage_ac": 235.8,
+  "current_ac": 0.05,
+  "power_ac": 12.5,
+  "frequency_ac": 49.99,
+  "power_factor": 0.54,
+  "ch1_v": 27.1, "ch1_i": 0.12,
+  "ch2_v": 27.1, "ch2_i": 0.13,
+  "ch3_v": 26.1, "ch3_i": 0.12,
+  "ch4_v": 26.1, "ch4_i": 0.12
+}
+```
+
+---
+
+## 📄 License & Attribution
+- **Dataset**: *A Real Controlled-Fault Benchmark for Power-Anomaly Detection and Identification on IoT Edge Nodes (RCF-Power v1.0)* by Thanh Trang Tran & Tran Nhut Tam, [10.5281/zenodo.20565892](https://doi.org/10.5281/zenodo.20565892), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- **Project Code**: Released under the MIT License.
