@@ -81,21 +81,18 @@ Every physical telemetry sample (from smart meters or PV inverters) is transform
             [ NORMAL ]                                  [ ANOMALOUS ]
      (Severity: None, Conf > 90%)                               │
                                                                 ▼
-                                                 STAGE 2: Residual Stacking
-                                                 ┌──────────────────────────────┐
-                                                 │ 5 Base Classifiers:          │
-                                                 │  1. Hist Gradient Boosting   │
-                                                 │  2. Random Forest (120 tr)   │
-                                                 │  3. Extra Trees (120 tr)     │
-                                                 │  4. Linear SGD (Log Loss)    │
-                                                 │  5. K-Nearest Neighbors      │
-                                                 │             │                │
-                                                 │  5-Fold OOF Meta-Features    │
-                                                 │  + Soft Voting Consensus     │
-                                                 │             │                │
-                                                 │ Level 1 Meta-Learner:        │
-                                                 │  Logistic Regression (L2)    │
-                                                 └──────────────┬───────────────┘
+                                                 STAGE 2: Multi-Model Soft Voting Consensus
+                                                 ┌─────────────────────────────────────────┐
+                                                 │ 5 Base Classifiers:                     │
+                                                 │  1. Hist Gradient Boosting              │
+                                                 │  2. Random Forest (100 trees, depth=14) │
+                                                 │  3. Extra Trees (100 trees, depth=14)   │
+                                                 │  4. Calibrated Linear SGD (Log Loss)    │
+                                                 │  5. K-Nearest Neighbors (k=5)           │
+                                                 │                    │                    │
+                                                 │ Probability Averaging & Consensus:      │
+                                                 │   P_bar(y=c|X) = (1/M) * sum(P_m)       │
+                                                 └────────────────────┬────────────────────┘
                                                                 │
                                         ┌───────────────────────┴───────────────────────┐
                                         ▼                                               ▼
