@@ -234,6 +234,34 @@ Open **`http://localhost:8501`** in your browser.
 
 ---
 
+## 📊 Benchmark Leaderboard & Empirical Evaluation
+
+Evaluated across **601,926 unseen test samples** (52 independent fault events) using `StratifiedGroupKFold` zero event leakage:
+
+| Rank | Model Architecture | Accuracy (%) | Macro-F1 (%) | Macro-Precision (%) | Macro-Recall (%) | Evaluation Status |
+| :---: | :--- | :---: | :---: | :---: | :---: | :--- |
+| 1 | **K-Nearest Neighbors ($k=5$)** | **98.83%** | 34.23% | 44.07% | 32.69% | Majority-Class Bias |
+| 2 | **★ Soft Voting Ensemble** | **98.76%** | **48.77%** | **45.44%** | **59.29%** | **Well-Fitting (Best Overall System)** |
+| 3 | **Hist Gradient Boosting** | **97.47%** | **43.32%** | 38.65% | **64.22%** | **Well-Fitting (Best Single Model)** |
+| 4 | **Extra Trees** | 95.26% | 31.29% | 29.33% | 48.05% | Well-Fitting |
+| 5 | **Random Forest** | 94.58% | 32.13% | 30.67% | 52.80% | Well-Fitting |
+| 6 | **Support Vector Machine** | 90.71% | 12.84% | 20.33% | 14.52% | Severe Underfitting |
+
+### Two-Stage Cascaded Safety & Continuous Metrics
+- **Critical Fault Safety Recall**: **95.83%** (FNR: 4.17% on catastrophic faults)
+- **Stage 1 Anomaly Recall**: **80.02%** at safety threshold $\tau = 0.125$
+- **Stage 2 Anomalies-Only Category Macro-F1**: **72.69%** (HistGradientBoosting) / **71.91%** (Soft Voting)
+- **Multi-Class Balanced Metrics**: Matthews Correlation Coefficient (**MCC: 0.5513**), Cohen's Kappa (**0.5329**)
+- **Continuous Power Regression**: Active Power $R^2 = 0.4777$, $\text{RMSE} = 581.80\text{ W}$, $\text{MAE} = 462.61\text{ W}$
+
+---
+
+## 📓 Interactive Google Colab Notebooks
+- `notebooks/Untitled2.ipynb`: End-to-end interactive Google Colab execution pipeline containing complete multi-station ingestion, Stage 1 & Stage 2 models, interactive scenario sliders, multi-metric evaluations, and 9 visual diagnostic figures.
+- Detailed technical report: [PowerGuard_AI_Technical_Report.md](reports/PowerGuard_AI_Technical_Report.md)
+
+---
+
 ## 📄 License & Attribution
 - **Dataset**: *A Real Controlled-Fault Benchmark for Power-Anomaly Detection and Identification on IoT Edge Nodes (RCF-Power v1.0)* by Thanh Trang Tran & Tran Nhut Tam, [10.5281/zenodo.20565892](https://doi.org/10.5281/zenodo.20565892), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Project Code**: Released under the MIT License.
